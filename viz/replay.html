@@ -44,9 +44,36 @@
   .legend{display:flex;gap:12px;flex-wrap:wrap;color:var(--dim);font-size:12px;margin-top:10px}
   .legend s{width:16px;height:3px;border-radius:2px;display:inline-block;
             vertical-align:middle;margin-right:5px;text-decoration:none}
-  .drop{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-        flex-direction:column;gap:10px;background:rgba(13,17,23,.94);text-align:center;
-        padding:24px;font-size:14px}
+  /* On-canvas HUD: the decision readout has to sit INSIDE the captured frame,
+     or a screen recording of the arena shows no decision at all. */
+  /* No corner of this arena is reliably empty — measured 6-10% of robot-seconds
+     under the panel wherever it goes — so the position is cycled by hand rather
+     than auto-placed, which would move it mid-shot. */
+  .hud{position:absolute;z-index:5;pointer-events:none;
+       background:rgba(13,17,23,.80);border:1px solid var(--line);border-radius:9px;
+       padding:9px 11px 10px;backdrop-filter:blur(7px);min-width:268px}
+  .hud.tl{top:12px;left:12px}     .hud.tr{top:12px;right:12px}
+  .hud.bl{bottom:78px;left:12px}  .hud.br{bottom:78px;right:12px}
+  .hud h3{margin:0 0 7px;font-size:11px;letter-spacing:.09em;color:var(--dim);
+          font-weight:600;display:flex;justify-content:space-between;gap:10px}
+  .hud h3 b{color:var(--fg);letter-spacing:0}
+  .hg{display:grid;grid-template-columns:auto 1fr 1fr auto;gap:2px 9px;
+      font:13px/1.45 ui-monospace,Consolas,monospace;align-items:baseline}
+  .hg .k{color:var(--dim);font-size:11.5px}
+  .hg .m{color:var(--model);font-weight:600}
+  .hg .u{color:var(--human)}
+  .hg .ok{font-size:11px;text-align:right}
+  .hud .pb{grid-column:1/-1;height:4px;border-radius:2px;background:#30363d;
+           margin:1px 0 3px;overflow:hidden}
+  .hud .pb i{display:block;height:100%}
+  .hud.hide{display:none}
+  /* recording mode: strip everything that is not the picture */
+  body.rec .wrap{max-width:none;padding:0}
+  body.rec header,body.rec .bar,body.rec .legend,body.rec .panels,body.rec .hint{display:none}
+  body.rec .stage{border:0;border-radius:0}
+  .drop{position:absolute;inset:0;z-index:9;display:flex;align-items:center;
+        justify-content:center;flex-direction:column;gap:10px;
+        background:rgba(13,17,23,.94);text-align:center;padding:24px;font-size:14px}
   .drop code{background:#0d1117;border:1px solid var(--line);border-radius:5px;
              padding:3px 8px;display:inline-block;margin-top:4px;
              font:12.5px ui-monospace,Consolas,monospace;color:var(--accent)}
@@ -66,6 +93,10 @@
 
   <div class="stage">
     <canvas id="field"></canvas>
+    <div class="hud bl" id="hud">
+      <h3><span>当前决策</span><b id="hudego"></b></h3>
+      <div class="hg" id="hudbody"></div>
+    </div>
     <canvas id="tape"></canvas>
     <div class="drop" id="drop">
       <div><b>把导出的 replay JSON 拖到这里</b></div>
@@ -94,6 +125,9 @@
       <button data-t="trail">轨迹</button>
       <button data-t="map" class="on">场地图</button>
       <button data-t="grid" class="on">网格</button>
+      <button data-t="hud" class="on">决策浮窗</button>
+      <button id="hudpos">浮窗位置</button>
+      <button id="rec">录制模式</button>
     </div>
   </div>
 
@@ -112,12 +146,16 @@
 
   <div class="panels">
     <div class="card">
-      <h2>当前决策</h2>
-      <div id="decision"></div>
-    </div>
-    <div class="card">
       <h2>建筑 / 全场一致率</h2>
       <div id="side"></div>
+    </div>
+    <div class="card">
+      <h2>快捷键</h2>
+      <div class="kv"><span style="color:var(--dim)">空格</span><b>播放 / 暂停</b></div>
+      <div class="kv"><span style="color:var(--dim)">← →</span><b>逐秒步进（Shift 跳 10 秒）</b></div>
+      <div class="kv"><span style="color:var(--dim)">N / P</span><b>跳到下一 / 上一处目标分歧</b></div>
+      <div class="kv"><span style="color:var(--dim)">H</span><b>决策浮窗换角</b></div>
+      <div class="kv"><span style="color:var(--dim)">R</span><b>录制模式（Esc 退出）</b></div>
     </div>
   </div>
 
@@ -141,7 +179,7 @@ const TGT_COL = ["#ff8f4d","#b98cff","#4dd97e","#4d9dff","#ff6ec7","#f7d154","#3
 
 const S = {
   data: null, t: 0, playing: false, speed: 2, ego: 0,
-  show: {model:1, human:1, probs:1, trail:0, grid:1, map:1},
+  show: {model:1, human:1, probs:1, trail:0, grid:1, map:1, hud:1},
 };
 
 // ---------------------------------------------------------------- arena image
@@ -410,29 +448,40 @@ function drawPanels(t){
     `<div class="kv"><span style="color:var(--dim)">${k}</span>
      <b style="color:${c||"var(--fg)"}">${v}</b></div>`;
 
-  let probs = "";
-  if(S.show.probs){
-    probs = '<div style="margin-top:8px">';
-    e.model.target_probs[i].forEach((p,k)=>{
-      if(p < .02) return;
-      probs += `<div class="kv" style="padding:1px 0">
-        <span style="color:${TGT_COL[k]}">${cls[k]}</span>
-        <span style="color:var(--dim)">${(p*100).toFixed(0)}%</span></div>
-        <div class="hp"><i style="width:${(p*100).toFixed(0)}%;
-        background:${TGT_COL[k]}"></i></div>`;
-    });
-    probs += "</div>";
+  // ---- on-canvas HUD: model vs human, side by side, inside the frame -------
+  $("#hud").classList.toggle("hide", !S.show.hud);
+  if(S.show.hud){
+    const tick = ok => `<span class="ok" style="color:${ok?COL.model:COL.red}">`
+                     + `${ok?"✓":"✗"}</span>`;
+    const nc = e.agree.nav[i];
+    $("#hudego").textContent = `${e.camp}方${e.type} · ${fmt(t)}`;
+    let h =
+      `<span class="k"></span><span class="k" style="color:${COL.model}">模型</span>`
+    + `<span class="k" style="color:${COL.human}">人类</span><span class="k"></span>`
+    + `<span class="k">打谁</span>`
+    + `<span class="m" style="color:${TGT_COL[mt]}">${cls[mt]}</span>`
+    + `<span class="u" style="color:${TGT_COL[ht]}">${cls[ht]}</span>${tick(mt===ht)}`
+    + `<span class="k">开火</span>`
+    + `<span class="m">${e.model.fire[i]?"允许":"禁止"} ${e.model.p_fire[i].toFixed(2)}</span>`
+    + `<span class="u">${e.human.fire[i]?"开火":"未开"}</span>`
+    + tick(!!e.model.fire[i] === !!e.human.fire[i])
+    + `<span class="k">走向</span>`
+    + `<span class="m">${e.model.gx[i].toFixed(1)},${e.model.gy[i].toFixed(1)}</span>`
+    + `<span class="u">${e.human.gx[i].toFixed(1)},${e.human.gy[i].toFixed(1)}</span>`
+    // nav has no right answer to tick against — show the direction agreement
+    + `<span class="ok" style="color:${COL.dim}">`
+    + `${(nc==null||Number.isNaN(nc)) ? "—" : (nc>=0?"+":"")+nc.toFixed(2)}</span>`;
+    if(S.show.probs){
+      e.model.target_probs[i].forEach((p,k)=>{
+        if(p < .04) return;              // hide the noise floor
+        h += `<span class="k" style="color:${TGT_COL[k]}">${cls[k]}</span>`
+           + `<span class="k" style="grid-column:2/-1">${(p*100).toFixed(0)}%</span>`
+           + `<div class="pb"><i style="width:${(p*100).toFixed(0)}%;`
+           + `background:${TGT_COL[k]}"></i></div>`;
+      });
+    }
+    $("#hudbody").innerHTML = h;
   }
-  $("#decision").innerHTML =
-    row("导航子目标(模型)",
-        `${e.model.gx[i].toFixed(1)}, ${e.model.gy[i].toFixed(1)} m`, COL.model) +
-    row("导航子目标(人类)",
-        `${e.human.gx[i].toFixed(1)}, ${e.human.gy[i].toFixed(1)} m`, COL.human) +
-    row("开火许可",
-        `${e.model.fire[i]?"是":"否"} (p=${e.model.p_fire[i].toFixed(2)})`,
-        e.model.fire[i]?COL.model:COL.dim) +
-    row("选定目标", cls[mt], TGT_COL[mt]) +
-    row("人类实际打的", cls[ht], TGT_COL[ht]) + probs;
 
   let s = "";
   for(const b of d.buildings){
@@ -494,11 +543,43 @@ document.querySelectorAll("[data-t]").forEach(b => {
     b.classList.toggle("on", !!S.show[k]);
   };
 });
+const HUD_POS = ["bl","tl","tr","br"];
+function cycleHud(){
+  const h = $("#hud");
+  const i = HUD_POS.indexOf([...h.classList].find(c => HUD_POS.includes(c)));
+  h.classList.remove(HUD_POS[i]);
+  h.classList.add(HUD_POS[(i + 1) % HUD_POS.length]);
+}
+$("#hudpos").onclick = cycleHud;
+
+function setRec(on){
+  document.body.classList.toggle("rec", on);
+  $("#rec").classList.toggle("on", on);
+  resize();               // the stage changes width, so the canvas must re-fit
+}
+$("#rec").onclick = () => setRec(!document.body.classList.contains("rec"));
+
+/** Jump to the next/previous second where model and human pick different
+ *  targets — those are the only frames worth stopping on. */
+function jumpDisagree(dir){
+  const a = S.data.egos[S.ego].agree.target;
+  for(let k = clamp(Math.round(S.t),0,a.length-1) + dir; k >= 0 && k < a.length;
+      k += dir){
+    if(!a[k]){ S.t = k; $("#seek").value = k; setPlaying(false); return; }
+  }
+}
+
 document.addEventListener("keydown", ev => {
   if(!S.data) return;
+  const step = ev.shiftKey ? 10 : 1;
   if(ev.code === "Space"){ ev.preventDefault(); $("#play").click(); }
-  if(ev.code === "ArrowRight"){ S.t = clamp(S.t+ (ev.shiftKey?10:1), 0, S.data.meta.T-1); $("#seek").value = S.t; }
-  if(ev.code === "ArrowLeft"){ S.t = clamp(S.t- (ev.shiftKey?10:1), 0, S.data.meta.T-1); $("#seek").value = S.t; }
+  if(ev.code === "ArrowRight"){ S.t = clamp(S.t+step, 0, S.data.meta.T-1); $("#seek").value = S.t; }
+  if(ev.code === "ArrowLeft"){ S.t = clamp(S.t-step, 0, S.data.meta.T-1); $("#seek").value = S.t; }
+  if(ev.code === "KeyN"){ jumpDisagree(+1); }
+  if(ev.code === "KeyP"){ jumpDisagree(-1); }
+  if(ev.code === "KeyH"){ cycleHud(); }
+  if(ev.code === "KeyR"){ setRec(!document.body.classList.contains("rec")); }
+  if(ev.code === "Escape"){ setRec(false); }
 });
 window.addEventListener("resize", resize);
 
