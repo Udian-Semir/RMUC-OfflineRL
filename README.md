@@ -284,9 +284,9 @@ AGENT=sentry DATA=data/sentry_tactical bash scripts/run_all.sh   # 换兵种
 
 ```bash
 # 单项
-python -m rm_rl.data.vis_map      --db dataset/xxx.sqlite --out data/vis_map.npz
-python -m rm_rl.data.team_prior   --db dataset/xxx.sqlite --out data/team_prior.json
-python -m rm_rl.data.build_dataset --db dataset/xxx.sqlite --out data/infantry_tactical \
+python -m rm_rl.data.vis_map      --db dataset/rmuc_2026_region_dataset.sqlite --out data/vis_map.npz
+python -m rm_rl.data.team_prior   --db dataset/rmuc_2026_region_dataset.sqlite --out data/team_prior.json
+python -m rm_rl.data.build_dataset --db dataset/rmuc_2026_region_dataset.sqlite --out data/infantry_tactical \
     --agent infantry --action-mode tactical --goal-horizon 5 \
     --vis-map data/vis_map.npz --team-prior data/team_prior.json
 python -m rm_rl.data.check_dataset --data data/infantry_tactical    # 训练前自检
@@ -381,7 +381,7 @@ cmd = apply_safety(cmd, heat=h, heat_limit=hl, ammo_left=a, ego_xy=(x, y))
             RoboMaster Robots from Referee-System Logs},
   author = {Navigator Team, Beijing Normal-Hong Kong Baptist University (BNBU)},
   year   = {2026},
-  howpublished = {\url{https://github.com/harkerbest/RMUC-OfflineRL}}
+  howpublished = {\url{https://github.com/Harkerbest/RMUC-OfflineRL}}
 }
 ```
 
