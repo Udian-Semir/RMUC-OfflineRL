@@ -46,6 +46,7 @@ RoboMaster 超级对抗赛（RMUC）官方于7月18日在论坛发布了 [RMUC 2
   - [决策质量（best checkpoint，held-out）](#决策质量best-checkpointheld-out)
   - [离线策略评估（FQE）](#离线策略评估fqe)
   - [评估的局限](#评估的局限)
+- [可视化](#可视化)
 - [快速开始](#快速开始)
   - [1. 获取数据](#1-获取数据)
   - [2. 安装环境](#2-安装环境)
@@ -278,6 +279,34 @@ RoboMaster 超级对抗赛（RMUC）官方于7月18日在论坛发布了 [RMUC 2
 
 结论：**在 420 步时域上用一个策略的日志评估另一个行为差异较大的策略，现有离线手段无法做到**（严格的重要性采样在该长度下方差发散）。判定必须依靠闭环。
 
+## 可视化
+
+[`viz/`](viz/) 提供三套工具，均直接读官方数据集与训练好的策略，用法见 [viz/README.md](viz/README.md)。
+
+**交互式决策回放**（`viz/replay.html`）。浏览器里播放整场比赛，在人类操作手的车上叠加模型同一秒的决策：青色实箭头为导航子目标，黄色虚箭头为人类实际走向，虚线连向模型选中的目标，开火许可时车体外圈脉冲。底部决策带并排显示人类与模型的目标序列，并标出两者不一致的秒。
+
+```bash
+python -m viz.export_replay --db dataset/rmuc_2026_region_dataset.sqlite \
+    --game-id <id> --run rm_runs/infantry_iql_tactical
+python -m viz.serve
+```
+
+**占位分析图**（`viz/heatmaps.py`）。[为什么用步兵数据训练哨兵策略](#为什么用步兵数据训练哨兵策略)一节的证据图。统计口径为**单场**、1 m 栅格（全场 420 格）——把 613 场池化会回答"全联盟哨兵站在哪"，恰好掩盖"一场之内哨兵几乎不动"这一待证事实。
+
+![同一支队伍：哨兵钉在一个点，步兵铺满全场](viz/figures/per_team.png)
+
+**策略向量场**（`viz/policy_field.py`）。冻结某一秒的真实战况，把 ego 依次放到全场 840 个候选位置各查一次策略：箭头为该位置的导航方向，底色为该位置会优先打谁，白线为开火许可的分界。
+
+![策略在全场每个位置的决策](viz/figures/policy_field_t90.png)
+
+该图同时是对[评估的局限](#评估的局限)中那个混淆的直接回应——`--report` 量化这个场离"状态无关"有多远，常量策略三项均为 0：
+
+| 指标 | 实测 |
+|---|---|
+| 同一秒内，导航方向在全场的圆标准差 | 70.3° |
+| 每 3 秒改变优先目标的格子占比 | 34.7% |
+| 每 3 秒导航方向的平均摆动 | 32.2° |
+
 ## 快速开始
 
 ### 1. 获取数据
@@ -348,6 +377,12 @@ rm_rl/
 │   ├── eval/                    # ope_fqe · ope_dt · win_alignment
 │   ├── train/                   # common(DDP) · train_offline · train_dt
 │   └── deploy.py                # 载入 + 反归一化 + 安全约束
+├── viz/
+│   ├── export_replay.py         # 一场比赛 + 模型逐秒决策 → JSON
+│   ├── replay.html              # Canvas 交互式回放（无外部依赖）
+│   ├── serve.py                 # 本地静态服务（fetch 不允许 file://）
+│   ├── heatmaps.py              # 哨兵 vs 步兵占位 / 离散度 / 跨队相似度 / 交战图
+│   └── policy_field.py          # 全场策略向量场（静态图 / 动画 / --report）
 └── docs/                        # logo
 ```
 

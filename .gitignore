@@ -22,6 +22,16 @@
 *.sqlite3
 *.db
 
+# ---- visualisation output ---------------------------------------------------
+# An exported replay is a machine-readable re-encoding of one match's full
+# per-second referee state — i.e. a slice of DJI's dataset — so it is generated
+# locally and never committed.  The aggregate figures under viz/figures/ ARE
+# tracked: they are derived statistics, and the README renders them.
+/viz/replays/
+/viz/figures/*.mp4
+/viz/figures/*.gif
+/viz/figures/*.webm
+
 # ---- archives ---------------------------------------------------------------
 *.7z
 *.zip
