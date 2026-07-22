@@ -396,6 +396,20 @@ def main():
               f"  cross-team sim={sim:.3f} ({k} schools)")
     print(f"  ratio: infantry covers {i_st['cells'] / s_st['cells']:.2f}x the map")
 
+    # Per robot type as well: the README's comparison table has one column per
+    # type, and a table whose numbers cannot be reproduced by the tool that
+    # ships beside it is worse than no table.
+    print(f"\n  per type (grid {CELL} m, {NCELL} cells, per-match averages):")
+    per_type = {}
+    for rt in (S.TYPE_SENTRY, S.TYPE_INFANTRY3, S.TYPE_INFANTRY4):
+        tj = load_trajectories(args.db, [rt], args.limit_games)
+        st = summarise(tj)
+        sim, k = team_similarity(tj)
+        per_type[rt] = (st, sim, k)
+        print(f"    {rt:<6} traj={st['n']:>5}  cells={st['cells']:6.2f}"
+              f"  H={st['entropy']:.3f}  top5={st['top5']:.1%}"
+              f"  cross-team sim={sim:.3f} ({k} schools)")
+
     small_multiples(sent, inf, os.path.join(args.out, "per_team.png"),
                     th, args.dpi, args.teams, args.name_teams)
     pooled_figure(
@@ -411,8 +425,9 @@ def main():
 
     with open(os.path.join(args.out, "stats.txt"), "w", encoding="utf-8") as f:
         f.write(f"grid={CELL}m ({NX}x{NY}={NCELL} cells), per-match averages\n")
-        for name, st, sim, k in (("sentry", s_st, s_sim, s_n),
-                                 ("infantry", i_st, i_sim, i_n)):
+        rows = [("sentry", s_st, s_sim, s_n), ("infantry", i_st, i_sim, i_n)]
+        rows += [(rt, st, sim, k) for rt, (st, sim, k) in per_type.items()]
+        for name, st, sim, k in rows:
             f.write(f"{name}: trajectories={st['n']} "
                     f"cells={st['cells']:.2f}/{NCELL} "
                     f"entropy={st['entropy']:.3f} top5={st['top5']:.4f} "
