@@ -38,6 +38,10 @@ from matplotlib.colors import LinearSegmentedColormap
 from scipy.ndimage import gaussian_filter
 
 from rm_rl.data import schema as S
+from . import field_canvas
+
+# set from --field-image in main(); None disables the arena backdrop
+FIELD_IMAGE: str | None = None
 
 CELL = 1.0             # metres per cell for every published statistic
 NX = int(round(S.FIELD_X / CELL))
@@ -171,6 +175,10 @@ def _field(ax, th):
     ax.set_yticks([])
     for s in ax.spines.values():
         s.set_color(th["grid"])
+    if FIELD_IMAGE:
+        # heavily knocked back: the arena is here to say *where* on the map the
+        # density sits, not to compete with it
+        field_canvas.draw(ax, FIELD_IMAGE, alpha=.30, desaturate=.65)
 
 
 def _draw(ax, trajs, th):
@@ -349,9 +357,20 @@ def main():
                     help="how many teams in the small-multiples figure")
     ap.add_argument("--name-teams", action="store_true",
                     help="label panels with the real school names")
+    ap.add_argument("--field-image", default=field_canvas.IMAGE_PATH,
+                    help="arena backdrop; see viz/assets/README.md")
+    ap.add_argument("--no-field-image", action="store_true")
     ap.add_argument("--font", default="Microsoft YaHei",
                     help="a font with CJK glyphs; matplotlib's default has none")
     args = ap.parse_args()
+
+    global FIELD_IMAGE
+    FIELD_IMAGE = (None if args.no_field_image
+                   or not field_canvas.available(args.field_image)
+                   else args.field_image)
+    if FIELD_IMAGE is None and not args.no_field_image:
+        print(f"[heatmaps] no arena image at {args.field_image} — plain "
+              f"background (see viz/assets/README.md)")
 
     # Set the CJK font for *every* family: any text left on the default
     # monospace/serif stack silently loses its Chinese glyphs to tofu.

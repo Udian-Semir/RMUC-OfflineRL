@@ -283,6 +283,8 @@ RoboMaster 超级对抗赛（RMUC）官方于7月18日在论坛发布了 [RMUC 2
 
 [`viz/`](viz/) 提供三套工具，均直接读官方数据集与训练好的策略，用法见 [viz/README.md](viz/README.md)。
 
+三者都可以 RMUC 2026 场地俯视图为底图（标定沿用 [ezthor/rm-battlescope](https://github.com/ezthor/rm-battlescope)：源图 1683 × 938，有效场地内框 `(100, 69, 1576, 856)` px 对应 `(0,0)–(28,15)` m——**裁判系统的原点是有效区内角，不是图片角点**）。该图属 DJI 素材，不随本仓库分发，需自行放置，见 [viz/assets/README.md](viz/assets/README.md) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)；没有它时所有工具照常工作，底图退化为纯网格。
+
 **交互式决策回放**（`viz/replay.html`）。浏览器里播放整场比赛，在人类操作手的车上叠加模型同一秒的决策：青色实箭头为导航子目标，黄色虚箭头为人类实际走向，虚线连向模型选中的目标，开火许可时车体外圈脉冲。底部决策带并排显示人类与模型的目标序列，并标出两者不一致的秒。
 
 ```bash
@@ -382,7 +384,9 @@ rm_rl/
 │   ├── replay.html              # Canvas 交互式回放（无外部依赖）
 │   ├── serve.py                 # 本地静态服务（fetch 不允许 file://）
 │   ├── heatmaps.py              # 哨兵 vs 步兵占位 / 离散度 / 跨队相似度 / 交战图
-│   └── policy_field.py          # 全场策略向量场（静态图 / 动画 / --report）
+│   ├── policy_field.py          # 全场策略向量场（静态图 / 动画 / --report）
+│   ├── field_canvas.py          # 场地底图标定（裁判原点 ≠ 图片角点）
+│   └── assets/                  # 场地底图放置处（DJI 素材，不随仓库分发）
 └── docs/                        # logo
 ```
 

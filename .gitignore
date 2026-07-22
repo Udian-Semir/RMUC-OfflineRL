@@ -22,6 +22,13 @@
 *.sqlite3
 *.db
 
+# ---- third-party arena image ------------------------------------------------
+# From the RMUC 2026 rulebook — DJI's material, not ours to redistribute.
+# viz/assets/README.md says where to get it; every tool degrades to a plain
+# grid without it.  The README beside it stays tracked.
+/viz/assets/*
+!/viz/assets/README.md
+
 # ---- visualisation output ---------------------------------------------------
 # An exported replay is a machine-readable re-encoding of one match's full
 # per-second referee state — i.e. a slice of DJI's dataset — so it is generated

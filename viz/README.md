@@ -15,6 +15,21 @@ python -m rm_rl.data.vis_map    --db dataset/rmuc_2026_region_dataset.sqlite --o
 python -m rm_rl.data.team_prior --db dataset/rmuc_2026_region_dataset.sqlite --out data/team_prior.json
 ```
 
+## 场地底图
+
+三套工具都能以 RMUC 2026 场地俯视图为底图。这张图属 DJI 素材,**不随仓库分发**,
+按 [`assets/README.md`](assets/README.md) 自行放到 `viz/assets/` 即可自动启用;
+没有它时一切照常工作,底图退化成纯网格。
+
+标定沿用 [ezthor/rm-battlescope](https://github.com/ezthor/rm-battlescope):
+源图 1683 × 938,有效场地内框 `(100, 69, 1576, 856)` px 对应 `(0,0)–(28,15)` m。
+**裁判系统的原点不是图片角点**——追踪坐标从有效区与停机坪的内角算起,一圈护栏在
+场地范围之外,不裁掉的话全场会整体偏移约一米。裁切框以比例存储,换成缩放过的图也能对齐。
+
+校验方式:RMUC 场地关于中心 180° 旋转对称,正确的裁切必须与自身的 180° 旋转吻合。
+实测该裁切 r = 0.476,平移 6 px 即跌到 0.31,平移 50 px 跌到 0.03 —— 中心标定无误。
+(对称地放大裁切框会让 r 上升,那只是把四周均匀的深色边框也算了进去,不是更好的裁切。)
+
 ---
 
 ## 1. 交互式回放
@@ -110,8 +125,10 @@ temporal arrow swing per 3s                           :   32.2 deg
 
 ---
 
-## 关于数据
+## 关于数据与素材
 
 `viz/replays/*.json` 是一整场比赛逐秒状态的机器可读再编码,等同于分发数据集切片,
 因此已在 `.gitignore` 中排除,请各自本地生成。`viz/figures/*.png` 是聚合统计图,随仓库提交;
-视频体积大且可复现,同样不提交。
+视频体积大且可复现,同样不提交。场地底图属 DJI 素材,同样不提交。
+
+完整声明见仓库根目录的 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。

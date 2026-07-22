@@ -51,6 +51,8 @@
              padding:3px 8px;display:inline-block;margin-top:4px;
              font:12.5px ui-monospace,Consolas,monospace;color:var(--accent)}
   .hint{color:var(--dim);font-size:12px;margin-top:14px}
+  .hint code{background:var(--panel);border:1px solid var(--line);border-radius:4px;
+             padding:1px 5px;font:11.5px ui-monospace,Consolas,monospace;color:var(--accent)}
   @media(max-width:720px){.panels{grid-template-columns:1fr}}
 </style>
 </head>
@@ -90,9 +92,16 @@
       <button data-t="human" class="on">人类实际</button>
       <button data-t="probs" class="on">目标分布</button>
       <button data-t="trail">轨迹</button>
+      <button data-t="map" class="on">场地图</button>
       <button data-t="grid" class="on">网格</button>
     </div>
   </div>
+
+  <p class="hint" id="nomap" hidden>
+    未找到场地底图。它来自 RMUC 2026 规则手册,属 DJI 素材,本仓库不作分发 ——
+    按 <code>viz/assets/README.md</code> 放到
+    <code>viz/assets/rmuc_2026_field_top_view.jpeg</code> 即可自动启用。
+  </p>
 
   <div class="legend">
     <span><s style="background:var(--model)"></s>模型导航子目标 / 选定目标</span>
@@ -132,8 +141,26 @@ const TGT_COL = ["#ff8f4d","#b98cff","#4dd97e","#4d9dff","#ff6ec7","#f7d154","#3
 
 const S = {
   data: null, t: 0, playing: false, speed: 2, ego: 0,
-  show: {model:1, human:1, probs:1, trail:0, grid:1},
+  show: {model:1, human:1, probs:1, trail:0, grid:1, map:1},
 };
+
+// ---------------------------------------------------------------- arena image
+// The referee origin is NOT the corner of the rulebook diagram: tracking starts
+// at the inner corners of the valid field, so the perimeter barrier has to be
+// cropped off before the picture is stretched onto the 28x15 m box. Crop is
+// expressed as ratios of (1683 x 938) so a resized copy still lines up.
+// Calibration from ezthor/rm-battlescope, rmuc_trajectory/field.py.
+const FIELD_IMG = {
+  src: "assets/rmuc_2026_field_top_view.jpeg",
+  crop: [100/1683, 69/938, 1576/1683, 856/938],
+};
+let fieldImg = null;
+(function(){
+  const im = new Image();
+  im.onload = () => { fieldImg = im; document.querySelector("#nomap").hidden = true; };
+  im.onerror = () => { document.querySelector("#nomap").hidden = false; };
+  im.src = FIELD_IMG.src;
+})();
 
 // ------------------------------------------------------------------- helpers
 const $ = s => document.querySelector(s);
@@ -192,15 +219,29 @@ function drawField(){
   fx.fillStyle = "#0d1117";
   fx.fillRect(cx(0),cy(F.y),F.x*PX,F.y*PX);
 
+  const mapped = fieldImg && S.show.map;
+  if(mapped){
+    const iw = fieldImg.naturalWidth, ih = fieldImg.naturalHeight, c = FIELD_IMG.crop;
+    fx.drawImage(fieldImg,
+      c[0]*iw, c[1]*ih, (c[2]-c[0])*iw, (c[3]-c[1])*ih,
+      cx(0), cy(F.y), F.x*PX, F.y*PX);
+    // The rulebook render is a bright colour drawing; at full strength it wins
+    // the fight against the data. Knock it back so the robots stay readable.
+    fx.fillStyle = "rgba(13,17,23,0.52)";
+    fx.fillRect(cx(0),cy(F.y),F.x*PX,F.y*PX);
+  }
+
   if(S.show.grid){
     fx.lineWidth = 1;
+    // fainter over the arena image, which already carries its own structure
+    const maj = mapped?"#ffffff14":"#1b222c", min = mapped?"#ffffff08":"#141a22";
     for(let x=0;x<=F.x;x+=1){
       // every 2 m is emphasised: that is the cell size of the engagement prior
-      fx.strokeStyle = (x%2===0)?"#1b222c":"#141a22";
+      fx.strokeStyle = (x%2===0)?maj:min;
       fx.beginPath(); fx.moveTo(cx(x),cy(0)); fx.lineTo(cx(x),cy(F.y)); fx.stroke();
     }
     for(let y=0;y<=F.y;y+=1){
-      fx.strokeStyle = (y%2===0)?"#1b222c":"#141a22";
+      fx.strokeStyle = (y%2===0)?maj:min;
       fx.beginPath(); fx.moveTo(cx(0),cy(y)); fx.lineTo(cx(F.x),cy(y)); fx.stroke();
     }
   }

@@ -50,8 +50,12 @@ from rm_rl.data.features import Entity, GameArrays, build_obs, obs_feature_names
 from rm_rl.data.team_prior import TeamPrior
 from rm_rl.data.vis_map import VisibilityMap
 from rm_rl.deploy import load_policy
+from . import field_canvas
 
-TGT_COL = ["#ff8f4d", "#b98cff", "#4dd97e", "#4d9dff", "#ff6ec7", "#f7d154",
+# set from --field-image in main(); None disables the arena backdrop
+FIELD_IMAGE: str | None = None
+
+TGT_COL =["#ff8f4d", "#b98cff", "#4dd97e", "#4d9dff", "#ff6ec7", "#f7d154",
            "#161b22"]                      # last = "no target", stays background
 TGT_CMAP = ListedColormap(TGT_COL)
 BG, FG, DIM, GRID = "#0d1117", "#e6edf3", "#7d8590", "#21262d"
@@ -137,6 +141,8 @@ def setup_axes(ax):
     ax.set_yticks([])
     for s in ax.spines.values():
         s.set_color(GRID)
+    if FIELD_IMAGE:
+        field_canvas.draw(ax, FIELD_IMAGE, alpha=.42, desaturate=.55)
 
 
 def draw_frame(ax, sweep, t, arrow_stride, show_fire):
@@ -296,8 +302,19 @@ def main():
     ap.add_argument("--report", action="store_true",
                     help="quantify how much the field varies over space and "
                          "time instead of rendering")
+    ap.add_argument("--field-image", default=field_canvas.IMAGE_PATH,
+                    help="arena backdrop; see viz/assets/README.md")
+    ap.add_argument("--no-field-image", action="store_true")
     ap.add_argument("--font", default="Microsoft YaHei")
     args = ap.parse_args()
+
+    global FIELD_IMAGE
+    FIELD_IMAGE = (None if args.no_field_image
+                   or not field_canvas.available(args.field_image)
+                   else args.field_image)
+    if FIELD_IMAGE is None and not args.no_field_image:
+        print(f"[policy_field] no arena image at {args.field_image} — plain "
+              f"background (see viz/assets/README.md)")
 
     for fam in ("font.sans-serif", "font.monospace", "font.serif"):
         plt.rcParams[fam] = [args.font, "SimHei", "DejaVu Sans"]
