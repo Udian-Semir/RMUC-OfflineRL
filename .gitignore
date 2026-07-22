@@ -1,0 +1,48 @@
+# NOTE: gitignore does NOT support trailing inline comments — `#` only starts a
+# comment at the beginning of a line. Keep comments on their own line, or the
+# text becomes part of the pattern and the rule silently matches nothing.
+
+# ---- competition data -------------------------------------------------------
+# The RMUC dataset belongs to DJI RoboMaster, and the archive exceeds GitHub's
+# 100 MB per-file limit. Download it from the official forum post linked in the
+# README and place it here. Only the field-description doc is tracked.
+/dataset/*
+!/dataset/*.md
+
+# ---- generated artefacts ----------------------------------------------------
+# Leading slash matters: a bare `data/` would also match the SOURCE package
+# rm_rl/data/ and silently drop half the codebase from the repo.
+/data/
+/runs/
+/rm_runs/
+*.npz
+*.pt
+*.ckpt
+*.sqlite
+*.sqlite3
+*.db
+
+# ---- archives ---------------------------------------------------------------
+*.7z
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+
+# ---- python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# ---- tooling / os -----------------------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log
