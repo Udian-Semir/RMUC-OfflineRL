@@ -17,7 +17,6 @@ import functools
 import http.server
 import json
 import os
-import socketserver
 import sys
 import webbrowser
 
@@ -66,9 +65,14 @@ def main():
 
     handler = functools.partial(http.server.SimpleHTTPRequestHandler,
                                 directory=HERE)
-    socketserver.TCPServer.allow_reuse_address = True
+    # Threading matters here: the viewer holds a keep-alive connection open, and
+    # a single-threaded server then refuses to answer anything else — the page
+    # looks alive while every other request (a second tab, a reload, curl)
+    # hangs forever.
+    http.server.ThreadingHTTPServer.allow_reuse_address = True
+    http.server.ThreadingHTTPServer.daemon_threads = True
     url = f"http://localhost:{args.port}/replay.html"
-    with socketserver.TCPServer(("", args.port), handler) as httpd:
+    with http.server.ThreadingHTTPServer(("", args.port), handler) as httpd:
         print(f"[serve] {url}   (ctrl-c to stop)")
         if not args.no_open:
             webbrowser.open(url)
