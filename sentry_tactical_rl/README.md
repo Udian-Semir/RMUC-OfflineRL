@@ -18,6 +18,16 @@
 
 本机现有可用底图：`~/workspace/Gazebo_simulation_for_sentry/src/sentry_perception/config/RMUC2025.yaml`，对应 28×15 m、0.01 m 的 `RMUC2025.png`。它目前只提供静态占据栅格；增益点、战术点、哨兵专属通行性和地图坐标核对仍需补充。**该文件名明确为 RMUC2025，只能用于验证雷达代价图管线，不能直接作为 RMUC2026 的最终训练地图。**
 
+Gazebo 工程另有标注为 RMUC 2026 的碰撞网格 `rmuc2026_map.dae`。可用下面脚本导出供人工标注的俯视底图：
+
+```bash
+~/miniconda3/envs/nerfstudio/bin/python \
+  sentry_tactical_rl/tools/extract_2026_mesh_map.py \
+  --mesh ~/workspace/Gazebo_simulation_for_sentry/src/sentry_sim/models/rmuc_map/meshes/rmuc2026_map.dae
+```
+
+导出的网格外缘约为 `29.05 × 16.05 m`，与裁判日志的 `28 × 15 m` 不完全相同。它可能包含墙体/外缘；先用红方基地、蓝方基地和前哨站三个地标求出到雷达/裁判坐标的变换，再把标注坐标接入训练。导出的图是**结构标注底图**，不是经验证的可通行黑白地图；坡面、狗洞和边缘必须按哨兵外廓和实车规则单独标注为可通行或硬禁区。
+
 ```bash
 python3.10 -m sentry_tactical_rl.costmap_smoke \
   --map-yaml ~/workspace/Gazebo_simulation_for_sentry/src/sentry_perception/config/RMUC2025.yaml

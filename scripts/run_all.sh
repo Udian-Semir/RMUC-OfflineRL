@@ -24,6 +24,7 @@ DATA="${DATA:-data/infantry_tactical}"
 NPROC="${NPROC:-$(python -c 'import torch;print(torch.cuda.device_count() or 1)')}"
 LIMIT_GAMES="${LIMIT_GAMES:-0}"
 GOAL_HORIZON="${GOAL_HORIZON:-5}"
+MATCH_SECONDS="${MATCH_SECONDS:-420}"
 SKIP_DT="${SKIP_DT:-0}"
 
 VIS_MAP="data/vis_map.npz"
@@ -37,11 +38,12 @@ log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 # recorded dims still match what the current code builds.
 dataset_ok() {
   [[ -f "$1/meta.json" && -f "$1/train.npz" ]] || return 1
-  python - "$1" <<'PY' 2>/dev/null
+  python - "$1" "$MATCH_SECONDS" <<'PY' 2>/dev/null
 import json, sys
 from rm_rl.data.features import obs_dim
 from rm_rl.algos.action_spec import get_spec
 d = sys.argv[1]
+match_seconds = float(sys.argv[2])
 m = json.load(open(d + "/meta.json", encoding="utf-8"))
 agent = (m.get("agent_types") or [m.get("agent_type", "哨兵")])[0].split(",")[0]
 want_o = obs_dim(agent)
@@ -51,6 +53,9 @@ if m.get("obs_dim") != want_o:
     sys.exit(1)
 if m.get("action_dim") != want_a:
     print(f"  stale: action_dim {m.get('action_dim')} != {want_a}", file=sys.stderr)
+    sys.exit(1)
+if float(m.get("match_seconds", -1)) != match_seconds:
+    print(f"  stale: match_seconds {m.get('match_seconds')} != {match_seconds:g}", file=sys.stderr)
     sys.exit(1)
 PY
 }
@@ -96,6 +101,7 @@ else
     --db "$DB" --out "$DATA" --agent "$AGENT" \
     --config configs/infantry_iql_tactical.yaml \
     --action-mode tactical --goal-horizon "$GOAL_HORIZON" \
+    --match-seconds "$MATCH_SECONDS" \
     --vis-map "$VIS_MAP" --team-prior "$TEAM_PRIOR" \
     --limit-games "$LIMIT_GAMES"
 fi
@@ -148,6 +154,7 @@ else
     --db "$DB" --out "$SENTRY_DATA" --agent sentry \
     --config configs/infantry_iql_tactical.yaml \
     --action-mode tactical --goal-horizon "$GOAL_HORIZON" \
+    --match-seconds "$MATCH_SECONDS" \
     --vis-map "$VIS_MAP" --team-prior "$TEAM_PRIOR" \
     --limit-games "$LIMIT_GAMES"
 fi

@@ -47,6 +47,7 @@ POWER_NORM = 120.0          # chassis power reference (W)
 AMMO_NORM = 400.0           # cumulative 17mm rounds reference
 COIN_NORM = 4000.0          # team coin reference
 FIELD_DIAG = float(np.hypot(S.FIELD_X, S.FIELD_Y))
+MATCH_SECONDS = 420.0  # RMUC seven-minute match phase
 
 TARGET_CONE_DEG = 15.0      # muzzle cone that counts as "aiming at"
 TARGET_TAU_DEG = 8.0        # softmax temperature over angular error (degrees)
@@ -229,18 +230,17 @@ ACTION_NAMES = ("vx", "vy", "yaw_rate", "fire")
 
 
 def build_obs(game: GameArrays, camp: str, agent_type: str,
-              t_max_ref: float = 450.0,
+              t_max_ref: float = MATCH_SECONDS,
               vis_radius: float = 0.0, vis_dropout: float = 0.0,
               rng=None, vis_map=None,
               team_feat: Optional[np.ndarray] = None) -> np.ndarray:
     """Return observation array [T, obs_dim] for `agent_type` of `camp`.
 
-    Observability (closing the train-vs-deploy gap): with full referee data every
-    enemy position is known.  Set `vis_radius` (metres) to reveal an enemy's
-    position only when it is within that range of the ego, and/or `vis_dropout`
-    in [0,1) to randomly drop detections — mimicking what an on-board sentry can
-    actually perceive.  Enemy HP/vuln stay known (the referee serial broadcasts
-    them on the real robot); only *position* is gated.
+    Observability: the default ``vis_radius=0`` preserves the full referee/radar
+    state, which is the intended input for a radar-station opponent policy.
+    Set ``vis_radius`` (metres) and/or ``vis_dropout`` only when constructing a
+    deliberately partial-observation policy. Enemy HP/vuln remain available;
+    only position is gated.
 
     `vis_map` is an optional `vis_map.VisibilityMap`: a per-enemy empirical
     engagement prior standing in for line-of-sight, which the log does not

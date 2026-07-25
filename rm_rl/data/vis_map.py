@@ -39,7 +39,7 @@ NX = int(np.ceil(S.FIELD_X / CELL))          # 14
 NY = int(np.ceil(S.FIELD_Y / CELL))          # 8
 NCELL = NX * NY                              # 112
 
-CONE_DEG = 15.0                              # muzzle cone that counts as "engaging"
+CONE_DEG = 15.0                              # muzle cone that counts as "engaging"
 
 
 def cell_index(x, y):

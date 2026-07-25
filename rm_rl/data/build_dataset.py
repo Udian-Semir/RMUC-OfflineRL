@@ -120,7 +120,8 @@ def build_game_trajectories(game: GameArrays, agent_types, winner: str,
                             vis_radius: float = 0.0, vis_dropout: float = 0.0,
                             rng=None, action_mode: str = "velocity",
                             goal_horizon: int = 5, vis_map=None,
-                            team_prior=None, game_id: int = 0):
+                            team_prior=None, game_id: int = 0,
+                            match_seconds: float = 420.0):
     """Yield one trajectory dict per (agent type, side) that fields the agent."""
     out = []
     if game.T < min_len + 1:
@@ -131,20 +132,21 @@ def build_game_trajectories(game: GameArrays, agent_types, winner: str,
         out.extend(_traj_for_type(
             game, agent_type, winner, rcfg, min_len, strength, schools,
             vis_radius, vis_dropout, rng, action_mode, goal_horizon,
-            vis_map, team_prior, game_id))
+            vis_map, team_prior, game_id, match_seconds))
     return out
 
 
 def _traj_for_type(game, agent_type, winner, rcfg, min_len, strength, schools,
                    vis_radius, vis_dropout, rng, action_mode, goal_horizon,
-                   vis_map, team_prior, game_id):
+                   vis_map, team_prior, game_id, match_seconds):
     out = []
     for camp in S.CAMPS:
         ego = game.get(agent_type, camp)
         if ego.alive.sum() < min_len * 0.3:   # agent barely present -> skip
             continue
         tfeat = team_prior.feats(game_id, camp) if team_prior is not None else None
-        obs = build_obs(game, camp, agent_type, vis_radius=vis_radius,
+        obs = build_obs(game, camp, agent_type, t_max_ref=match_seconds,
+                        vis_radius=vis_radius,
                         vis_dropout=vis_dropout, rng=rng,
                         vis_map=vis_map, team_feat=tfeat)  # [T, od]
         act = build_action_raw(game, camp, agent_type,
@@ -206,6 +208,8 @@ def main():
                          "weapons-free gate (the deployable layout)")
     ap.add_argument("--goal-horizon", type=int, default=5,
                     help="seconds ahead for the nav sub-goal (goal/tactical)")
+    ap.add_argument("--match-seconds", type=float, default=420.0,
+                    help="match duration used to normalise elapsed/remaining time (default: 420)")
     ap.add_argument("--vis-map", default=None,
                     help="npz from rm_rl.data.vis_map; adds a per-enemy "
                          "empirical engagement (line-of-sight) prior")
@@ -214,6 +218,8 @@ def main():
                          "opponent-strength features")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
+    if args.match_seconds <= 0:
+        raise SystemExit("--match-seconds must be positive")
     agents = S.resolve_agents(args.agent)     # alias / group -> [机器人类型...]
     if not agents:
         raise SystemExit(f"could not resolve --agent {args.agent!r}")
@@ -230,7 +236,8 @@ def main():
     vmap = VisibilityMap.load(args.vis_map)
     tprior = TeamPrior.load(args.team_prior)
     print(f"[build] agents={agents} vis_map={'on' if vmap else 'off'} "
-          f"team_prior={'on' if tprior else 'off'} action_mode={args.action_mode}")
+          f"team_prior={'on' if tprior else 'off'} action_mode={args.action_mode} "
+          f"match_seconds={args.match_seconds:g}")
     con = sqlite3.connect(args.db)
     matches = load_matches(con)
     strength = team_strength(matches)
@@ -259,7 +266,7 @@ def main():
                                      action_mode=args.action_mode,
                                      goal_horizon=args.goal_horizon,
                                      vis_map=vmap, team_prior=tprior,
-                                     game_id=int(gid))
+                                     game_id=int(gid), match_seconds=args.match_seconds)
         split = "val" if gid in val_ids else "train"
         for tr in ts:
             tr["game_id"] = int(gid)
@@ -332,6 +339,7 @@ def main():
         act_scale=act_scale.tolist(),
         reward=rcfg.__dict__,
         field=dict(x=S.FIELD_X, y=S.FIELD_Y),
+        match_seconds=args.match_seconds,
         vis_radius=args.vis_radius, vis_dropout=args.vis_dropout,
         action_mode=args.action_mode, goal_horizon=args.goal_horizon,
         vis_map=bool(vmap), team_prior=bool(tprior),
