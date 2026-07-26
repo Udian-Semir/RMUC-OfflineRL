@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import heapq
+import json
 from pathlib import Path
 from typing import Iterable
 
+import cv2
 import numpy as np
 import yaml
 
@@ -40,6 +42,7 @@ class SemanticMap:
     blue_outpost: Cell = (22, 7)
     red_base: Cell = (1, 7)
     blue_base: Cell = (26, 7)
+    semantic_layers: dict[str, np.ndarray] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         shape = (self.height, self.width)
@@ -47,6 +50,9 @@ class SemanticMap:
             raise ValueError(f"map layers must have shape {shape}")
         if np.any(self.static_cost < 0):
             raise ValueError("static_cost must be non-negative")
+        for name, layer in self.semantic_layers.items():
+            if layer.shape != shape:
+                raise ValueError(f"semantic layer {name!r} must have shape {shape}")
         for name, cell in self.anchors.items():
             if not self.is_free(cell):
                 raise ValueError(f"anchor {name!r} is not traversable: {cell}")
@@ -122,6 +128,102 @@ class SemanticMap:
             blue_base=tuple(objectives.get("blue_base", (26, 7))),
         )
 
+    @classmethod
+    def from_aligned_json(
+        cls,
+        path: str | Path,
+        *,
+        obstacle_path: str | Path | None = None,
+        occupancy_threshold: float = 0.5,
+    ) -> "SemanticMap":
+        """Load the supplied RMUC semantic JSON onto the tactical grid.
+
+        The source images are high-resolution annotation/occupancy layers;
+        this adapter deliberately reduces them to the existing 1 m tactical
+        grid.  Semantic masks stay separate from ``hard_blocked``.  The blue
+        undulating-road layer is additionally treated as a sentry hard
+        exclusion because that is the explicit annotation supplied for this
+        policy.
+        """
+        path = Path(path)
+        with path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        frame = payload.get("frame", {})
+        field_x = float(frame.get("x_m", 28.0))
+        field_y = float(frame.get("y_m", 15.0))
+        width, height = int(round(field_x)), int(round(field_y))
+        if not np.isclose(field_x, width) or not np.isclose(field_y, height):
+            raise ValueError("aligned JSON frame must currently map to integer tactical metres")
+        if not 0.0 <= occupancy_threshold <= 1.0:
+            raise ValueError("occupancy_threshold must be in [0, 1]")
+
+        if obstacle_path is None:
+            obstacle_path = payload.get("obstacle_map", "blackwhite_map.png")
+        obstacle = Path(obstacle_path)
+        if not obstacle.is_absolute() and not obstacle.exists():
+            candidate = path.parent / obstacle.name
+            if candidate.exists():
+                obstacle = candidate
+        image = cv2.imread(str(obstacle), cv2.IMREAD_UNCHANGED)
+        if image is None:
+            raise FileNotFoundError(obstacle)
+        rgb = image[:, :, :3][:, :, ::-1]
+        blocked_source = np.all(rgb <= 5, axis=2)
+        if image.ndim == 3 and image.shape[2] == 4:
+            # Transparent padding is outside the usable field and must not
+            # become a traversable route at the tactical grid boundary.
+            blocked_source |= image[:, :, 3] == 0
+        occupancy = cv2.resize(blocked_source.astype(np.float32), (width, height), interpolation=cv2.INTER_AREA)
+        hard = occupancy >= occupancy_threshold
+
+        semantic_layers: dict[str, np.ndarray] = {}
+        anchors: dict[str, Cell] = {}
+        objective_centers: dict[str, list[tuple[float, float]]] = {"base": [], "outpost": []}
+        for region in payload.get("regions", []):
+            kind = str(region.get("kind", "unknown"))
+            points = np.asarray(region.get("polygon_xy_m", []), dtype=np.float32)
+            if len(points) < 3:
+                continue
+            px = np.rint(points[:, 0] / field_x * (width - 1)).astype(np.int32)
+            py = np.rint((1.0 - points[:, 1] / field_y) * (height - 1)).astype(np.int32)
+            mask = semantic_layers.setdefault(kind, np.zeros((height, width), dtype=bool))
+            cv2.fillPoly(mask.view(np.uint8), [np.stack((px, py), axis=1)], 1)
+            center = (float(points[:, 0].mean()), float(points[:, 1].mean()))
+            if kind in objective_centers:
+                objective_centers[kind].append(center)
+            requested = (int(np.floor(center[0])), int(np.floor(center[1])))
+            requested = (int(np.clip(requested[0], 0, width - 1)), int(np.clip(requested[1], 0, height - 1)))
+            candidate = _nearest_free(hard, requested)
+            if candidate is not None:
+                anchors[str(region.get("id", f"{kind}_{len(anchors) + 1}"))] = candidate
+
+        # Explicitly annotated as unusable by the sentry.  This is a policy
+        # passability rule, not a claim that every robot has the same chassis.
+        hard |= semantic_layers.get("undulating_road", np.zeros_like(hard))
+
+        def objective(kind: str, side: str, fallback: Cell) -> Cell:
+            centers = sorted(objective_centers.get(kind, []), key=lambda value: value[0])
+            if not centers:
+                return fallback
+            point = centers[0] if side == "red" else centers[-1]
+            return (
+                int(np.clip(np.floor(point[0]), 0, width - 1)),
+                int(np.clip(np.floor(point[1]), 0, height - 1)),
+            )
+
+        return cls(
+            width=width,
+            height=height,
+            hard_blocked=hard,
+            static_cost=np.zeros((height, width), dtype=np.float32),
+            anchors=anchors,
+            red_outpost=objective("outpost", "red", (5, 7)),
+            blue_outpost=objective("outpost", "blue", (22, 7)),
+            red_base=objective("base", "red", (1, 7)),
+            blue_base=objective("base", "blue", (26, 7)),
+            semantic_layers={name: layer.astype(np.float32) for name, layer in semantic_layers.items()},
+        )
+
     @property
     def anchor_names(self) -> tuple[str, ...]:
         return tuple(self.anchors)
@@ -133,6 +235,9 @@ class SemanticMap:
     def is_free(self, cell: Cell) -> bool:
         x, y = cell
         return self.in_bounds(cell) and not bool(self.hard_blocked[y, x])
+
+    def nearest_free(self, cell: Cell, max_radius: int = 12) -> Cell | None:
+        return _nearest_free(self.hard_blocked, cell, max_radius)
 
     def clamp_cell(self, cell: Cell) -> Cell:
         return (int(np.clip(cell[0], 0, self.width - 1)),
@@ -205,14 +310,16 @@ class SemanticMap:
         return self.is_free(b)
 
     def raster_base(self) -> np.ndarray:
-        """Static map channels: traversable, hard-blocked, static cost, objectives."""
-        out = np.zeros((4, self.height, self.width), dtype=np.float32)
+        """Static map channels plus independent semantic masks."""
+        out = np.zeros((4 + len(self.semantic_layers), self.height, self.width), dtype=np.float32)
         out[0] = (~self.hard_blocked).astype(np.float32)
         out[1] = self.hard_blocked.astype(np.float32)
         out[2] = self.static_cost
         for x, y, value in (*self._objective_marks(self.red_outpost, 1.0),
                             *self._objective_marks(self.blue_outpost, -1.0)):
             out[3, y, x] = value
+        for channel, name in enumerate(sorted(self.semantic_layers), start=4):
+            out[channel] = self.semantic_layers[name]
         return out
 
     def _objective_marks(self, center: Cell, value: float) -> Iterable[tuple[int, int, float]]:
@@ -220,3 +327,23 @@ class SemanticMap:
         for x in range(max(0, cx - 1), min(self.width, cx + 2)):
             for y in range(max(0, cy - 1), min(self.height, cy + 2)):
                 yield x, y, value
+
+
+def _nearest_free(hard_blocked: np.ndarray, cell: Cell, max_radius: int = 12) -> Cell | None:
+    """Find a nearby free cell without assuming a particular map topology."""
+    x0 = int(np.clip(cell[0], 0, hard_blocked.shape[1] - 1))
+    y0 = int(np.clip(cell[1], 0, hard_blocked.shape[0] - 1))
+    if not hard_blocked[y0, x0]:
+        return (x0, y0)
+    for radius in range(1, max_radius + 1):
+        for dx in range(-radius, radius + 1):
+            for dy in (-radius, radius):
+                x, y = x0 + dx, y0 + dy
+                if 0 <= x < hard_blocked.shape[1] and 0 <= y < hard_blocked.shape[0] and not hard_blocked[y, x]:
+                    return (x, y)
+        for dy in range(-radius + 1, radius):
+            for dx in (-radius, radius):
+                x, y = x0 + dx, y0 + dy
+                if 0 <= x < hard_blocked.shape[1] and 0 <= y < hard_blocked.shape[0] and not hard_blocked[y, x]:
+                    return (x, y)
+    return None

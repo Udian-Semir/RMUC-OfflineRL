@@ -44,13 +44,21 @@ python3.10 -m sentry_tactical_rl.costmap_smoke \
 ```bash
 python3.10 -m sentry_tactical_rl.smoke
 python3.10 -m sentry_tactical_rl.train --config sentry_tactical_rl/configs/demo.yaml
+# 训练时实时查看 reward / cost / 伤害 / 目标切换曲线
+python3.10 -m sentry_tactical_rl.train --config sentry_tactical_rl/configs/demo.yaml --live
+# 使用已交付的 RMUC 2026 语义图和黑白障碍图，并单独保存结果
+python3.10 -m sentry_tactical_rl.train \
+  --config sentry_tactical_rl/configs/demo.yaml \
+  --map-json sentry_tactical_rl/assets/semantic_map_aligned.json \
+  --obstacle-map sentry_tactical_rl/assets/blackwhite_map.png \
+  --out-dir runs/sentry_tactical_rmuc2026 --live
 ```
 
-训练只依赖仓库已有的 `numpy` 和 `torch`。本工作区默认 `python` 是没有 torch 的 Python 3.13；请使用装有 torch 的 Python 3.10 或团队的 conda 环境。默认 checkpoint 会写入 `runs/sentry_tactical_demo/`。
+训练依赖 `numpy`、`torch` 和可选的 `matplotlib` 实时窗口。本工作区默认 `python` 是没有 torch 的 Python 3.13；请使用装有 torch 的 Python 3.10 或团队的 conda 环境。即使不加 `--live`，默认 checkpoint 和 `metrics.csv` 仍会写入 `runs/sentry_tactical_demo/`；加上 `--live` 后还会持续刷新 `training_live.png`。
 
 ## 当前接口
 
-每个战术决策为：
+当前 demo 的每个战术决策为：
 
 ```text
 (goal_anchor_id, target_id, fire_mode)
@@ -61,6 +69,8 @@ python3.10 -m sentry_tactical_rl.train --config sentry_tactical_rl/configs/demo.
 - `fire_mode`：保持停火或在安全、可见、射程内交战。
 
 每个候选点都由传统 A* 计算路径总代价和可达性。仿真中不允许穿过硬禁区；真实部署时应由现有导航栈接管该职责。
+
+当前 demo 使用离散锚点；追击时不再使用全局 5 秒硬保持，以允许每秒更新目标。连续 `goal_xy`、目标变化率限制、3 m 交战环和短时域候选重排仍需在动作执行器阶段实现。
 
 ## 与 Gazebo 导航工程的边界
 

@@ -38,6 +38,7 @@ class PPOTrainer:
         self.episodes_finished = 0
         self.episode_returns: list[float] = []
         self._running_return = 0.0
+        self.last_rollout_stats: dict[str, float] = {}
 
     def _tensor_obs(self, obs: dict[str, np.ndarray]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         maps = torch.as_tensor(obs["map"], device=self.device).unsqueeze(0)
@@ -50,12 +51,36 @@ class PPOTrainer:
         records: dict[str, list[Any]] = {key: [] for key in (
             "map", "vector", "goal_mask", "target_mask", "action", "log_prob", "value", "reward", "done"
         )}
+        telemetry: dict[str, list[float]] = {
+            "reward": [],
+            "path_cost": [],
+            "path_risk": [],
+            "damage_dealt": [],
+            "damage_taken": [],
+            "blue_outpost_damage": [],
+            "red_outpost_damage": [],
+            "red_outpost_control_loss": [],
+            "invalid_action": [],
+            "goal_switch": [],
+            "goal_switch_blocked": [],
+        }
         for _ in range(self.config.rollout_steps):
             maps, vectors, goals, targets = self._tensor_obs(self.obs)
             with torch.no_grad():
                 action, log_prob, value = self.model.act(maps, vectors, goals, targets)
             action_np = action.squeeze(0).cpu().numpy()
-            next_obs, reward, done, _ = self.env.step(action_np)
+            next_obs, reward, done, info = self.env.step(action_np)
+            telemetry["reward"].append(float(reward))
+            telemetry["path_cost"].append(float(info.get("path_cost", 0.0)))
+            telemetry["path_risk"].append(float(info.get("path_risk", 0.0)))
+            telemetry["damage_dealt"].append(float(info.get("damage_dealt", 0.0)))
+            telemetry["damage_taken"].append(float(info.get("damage_taken", 0.0)))
+            telemetry["blue_outpost_damage"].append(float(info.get("blue_outpost_damage", 0.0)))
+            telemetry["red_outpost_damage"].append(float(info.get("red_outpost_damage", 0.0)))
+            telemetry["red_outpost_control_loss"].append(float(info.get("red_outpost_control_loss", 0.0)))
+            telemetry["invalid_action"].append(float(bool(info.get("invalid_action", False))))
+            telemetry["goal_switch"].append(float(bool(info.get("goal_switch", False))))
+            telemetry["goal_switch_blocked"].append(float(bool(info.get("goal_switch_blocked", False))))
             for key, source in (("map", self.obs["map"]), ("vector", self.obs["vector"]),
                                 ("goal_mask", self.obs["goal_mask"]), ("target_mask", self.obs["target_mask"]),
                                 ("action", action_np), ("log_prob", log_prob.item()), ("value", value.item()),
@@ -69,6 +94,11 @@ class PPOTrainer:
                 self.obs = self.env.reset()
             else:
                 self.obs = next_obs
+
+        self.last_rollout_stats = {
+            f"mean_{key}": float(np.mean(values)) if values else 0.0
+            for key, values in telemetry.items()
+        }
 
         with torch.no_grad():
             bootstrap = self.model.act(*self._tensor_obs(self.obs), deterministic=True)[2].item()
@@ -128,6 +158,7 @@ class PPOTrainer:
         recent = self.episode_returns[-10:]
         metrics["mean_episode_return"] = float(np.mean(recent)) if recent else float("nan")
         metrics["episodes"] = float(self.episodes_finished)
+        metrics.update(self.last_rollout_stats)
         return metrics
 
     def save(self, path: str | Path, *, extra: dict[str, Any] | None = None) -> None:

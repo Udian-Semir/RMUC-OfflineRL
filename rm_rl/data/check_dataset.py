@@ -52,11 +52,24 @@ def check(data_dir: str) -> int:
     names = (obs_feature_names((meta.get("agent_types") or [S.TYPE_SENTRY])[0])
              if obs.shape[1] == obs_dim((meta.get("agent_types") or [S.TYPE_SENTRY])[0])
              else [f"obs[{i}]" for i in range(obs.shape[1])])
+    agent_type = (meta.get("agent_types") or [S.TYPE_SENTRY])[0]
+
     def known_constant(nm: str) -> bool:
         if is_capability_feature(nm):
             return True
+        # The fixed ally roster includes ego itself.  Its relative coordinates
+        # are necessarily zero and are the intended role-agnostic ego cue.
+        if nm in {f"ally[{agent_type}].rx", f"ally[{agent_type}].ry", f"ally[{agent_type}].dist"}:
+            return True
         # 空中 is a UAV and is never flagged 易伤 by the enemy radar.
         if nm == f"enemy[{S.TYPE_AERIAL}].vuln":
+            return True
+        # 工程 has no shooting weapon in the match telemetry, so its selected
+        # weapon-state observations are correctly zero.  Aerial is never
+        # exposed to the radar's 易伤 state, including when it is the ego unit.
+        if agent_type == S.TYPE_ENGINEER and nm in {"ego.heat_frac", "ego.ammo"}:
+            return True
+        if agent_type == S.TYPE_AERIAL and nm == "ego.vuln":
             return True
         # Bases are destroyed in 1 of 1226 instances across the whole season, so
         # this flag is constant in any subsample. See README "数据集".
@@ -96,9 +109,10 @@ def check(data_dir: str) -> int:
         named = (hard != NO_TARGET).mean()
         print(f"a concrete enemy is the argmax on {named:.1%} of live seconds")
 
-        if gate.mean() < 0.005:
+        movement_only = agent_type == S.TYPE_ENGINEER
+        if gate.mean() < 0.005 and not movement_only:
             problems.append("fire gate is on <0.5% of the time — check 累计17mm发弹")
-        if named < 0.02:
+        if named < 0.02 and not movement_only:
             problems.append("target labels are almost entirely '<no target>' — "
                             "check 枪口朝向 sentinel handling / cone width")
         if float(np.abs(nav).mean()) < 1e-4:

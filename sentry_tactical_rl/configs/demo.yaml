@@ -1,8 +1,9 @@
 env:
-  horizon: 120
+  horizon: 420
   seed: 7
   sensor_range: 13.0
   decision_seconds: 1.0
+  goal_hold_seconds: 0.0
 train:
   seed: 7
   device: auto

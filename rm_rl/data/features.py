@@ -65,8 +65,10 @@ class Entity:
     power: np.ndarray
     heat17: np.ndarray
     heat17_max: np.ndarray
+    heat42: np.ndarray
     heat42_max: np.ndarray
     ammo17: np.ndarray
+    ammo42: np.ndarray
     coin_left: np.ndarray
     coin_total: np.ndarray
     vuln: np.ndarray
@@ -77,7 +79,8 @@ class Entity:
         z = np.zeros(T, dtype=np.float32)
         return cls(x=z, y=z, z=z, hp=z, maxhp=z + S.MAX_HP.get(rtype, 1.0),
                    yaw=z, power=z, heat17=z, heat17_max=z, heat42_max=z,
-                   ammo17=z, coin_left=z, coin_total=z, vuln=z, alive=z)
+                   heat42=z, ammo17=z, ammo42=z, coin_left=z, coin_total=z,
+                   vuln=z, alive=z)
 
 
 class GameArrays:
@@ -141,6 +144,13 @@ def _capability(e: Entity, rtype: str):
         e.heat42_max / S.HEAT42_MAX_REF,
         e.power / POWER_NORM,
     ]
+
+
+def weapon_state(e: Entity, rtype: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Select the actually used weapon telemetry for tactical labels/features."""
+    if rtype == S.TYPE_HERO:
+        return e.heat42, e.heat42_max, e.ammo42
+    return e.heat17, e.heat17_max, e.ammo17
 
 
 # ---------------------------------------------------------------------------
@@ -265,12 +275,13 @@ def build_obs(game: GameArrays, camp: str, agent_type: str,
     feats.append(_safe_frac(ego.hp, ego.maxhp))
     feats.append(ego.alive)
     feats.append(ego.vuln)
-    feats.append(_safe_frac(ego.heat17, ego.heat17_max))
-    feats.append(_safe_frac(ego.heat17_max - ego.heat17, ego.heat17_max))
+    ego_heat, ego_heat_max, ego_ammo = weapon_state(ego, agent_type)
+    feats.append(_safe_frac(ego_heat, ego_heat_max))
+    feats.append(_safe_frac(ego_heat_max - ego_heat, ego_heat_max))
     feats.append(ego.power / POWER_NORM)
     feats.append(np.sin(eyaw))
     feats.append(np.cos(eyaw))
-    feats.append(ego.ammo17 / AMMO_NORM)
+    feats.append(ego_ammo / AMMO_NORM)
     feats.append(_tier(ego, agent_type))                    # HP-upgrade tier
     feats.append(ego.heat17_max / S.HEAT17_MAX_REF)          # 17mm upgrade tier
     feats.append(ego.heat42_max / S.HEAT42_MAX_REF)          # 42mm upgrade tier
@@ -406,7 +417,8 @@ def fire_gate(game: GameArrays, camp: str, agent_type: str) -> np.ndarray:
     (no inference): the referee log records every shot with the shooter's id.
     """
     ego = game.get(agent_type, camp)
-    fired = np.diff(ego.ammo17, prepend=ego.ammo17[:1]) > 0.5
+    _, _, ammo = weapon_state(ego, agent_type)
+    fired = np.diff(ammo, prepend=ammo[:1]) > 0.5
     return fired.astype(np.float32)
 
 
@@ -460,7 +472,8 @@ def build_action_raw(game: GameArrays, camp: str, agent_type: str,
         return np.nan_to_num(act, nan=0.0, posinf=0.0, neginf=0.0)
 
     yaw_rate = _wrap_deg(np.diff(yaw))
-    fire = np.clip(np.diff(ego.ammo17), 0.0, None)
+    _, _, ammo = weapon_state(ego, agent_type)
+    fire = np.clip(np.diff(ammo), 0.0, None)
     # When the robot is dead at either end of the step, the "action" is not a
     # decision — zero it so it does not pollute the policy target.
     act = np.stack([vx, vy, yaw_rate, fire], axis=1).astype(np.float32)

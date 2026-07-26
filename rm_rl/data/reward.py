@@ -27,7 +27,7 @@ from typing import Dict, Tuple
 import numpy as np
 
 from . import schema as S
-from .features import GameArrays
+from .features import GameArrays, weapon_state
 
 # normalisation denominators (keep every term ~O(1) per second)
 HP_NORM = 200.0
@@ -121,7 +121,8 @@ def compute_reward(game: GameArrays, camp: str, agent_type: str,
     comp["death"] = -cfg.w_death * _team_deaths(game, camp)
     comp["ego_surv"] = cfg.w_ego_surv * (ego.alive[1:] > 0).astype(np.float32)
     comp["ego_hp"] = -cfg.w_ego_hp * drop(ego.hp) / EGO_HP_NORM
-    overflow = np.clip(ego.heat17[1:] - ego.heat17_max[1:], 0.0, None)
+    ego_heat, ego_heat_max, _ = weapon_state(ego, agent_type)
+    overflow = np.clip(ego_heat[1:] - ego_heat_max[1:], 0.0, None)
     comp["heat"] = -cfg.w_heat * overflow / 100.0
     adv = (own_coin - en_coin)
     comp["econ"] = cfg.w_econ * (adv[1:] - adv[:-1]) / COIN_NORM
@@ -172,7 +173,8 @@ def reward_features(game: GameArrays, camp: str, agent_type: str) -> np.ndarray:
         return float(np.clip(a[:-1] - a[1:], 0.0, None).sum())
 
     adv = own_coin - en_coin
-    overflow = float(np.clip(ego.heat17[1:] - ego.heat17_max[1:], 0.0, None).sum())
+    ego_heat, ego_heat_max, _ = weapon_state(ego, agent_type)
+    overflow = float(np.clip(ego_heat[1:] - ego_heat_max[1:], 0.0, None).sum())
     return np.array([
         drop(en_out) / OUT_NORM,
         drop(own_out) / OUT_NORM,

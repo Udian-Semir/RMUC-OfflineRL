@@ -51,17 +51,20 @@ class SentryTacticalEnv:
         seed: int = 7,
         sensor_range: float = 13.0,
         decision_seconds: float = 1.0,
+        goal_hold_seconds: float = 0.0,
     ) -> None:
         self.map = semantic_map or SemanticMap.demo()
         self.navigator = GridNavigationBackend(self.map)
         self.horizon = horizon
         self.sensor_range = sensor_range
         self.decision_seconds = decision_seconds
+        self.goal_hold_seconds = max(0.0, float(goal_hold_seconds))
+        self.goal_hold_steps = int(np.ceil(self.goal_hold_seconds / max(self.decision_seconds, 1e-6)))
         self.rng = np.random.default_rng(seed)
         self.anchor_names = self.map.anchor_names
         self.n_goals = len(self.anchor_names)
         self.n_targets = self.NONE_TARGET + 1
-        self.map_channels = 8
+        self.map_channels = self.map.raster_base().shape[0] + 4
         # scalar + per-goal + per-enemy + per-ally feature layout
         self.vector_dim = 7 + self.n_goals * 5 + 3 * 5 + 2 * 4
         self.reset(seed=seed)
@@ -70,27 +73,67 @@ class SentryTacticalEnv:
         if seed is not None:
             self.rng = np.random.default_rng(seed)
         self.step_count = 0
-        self.sentry = Unit(7, "red", (3, 7), hp=400.0, max_hp=400.0, ammo=260)
+
+        def spawn(cell: Cell) -> Cell:
+            return self.map.nearest_free(cell) or self.map.clamp_cell(cell)
+
+        self.sentry = Unit(7, "red", spawn((3, 7)), hp=400.0, max_hp=400.0, ammo=260)
         self.allies = [
-            Unit(3, "red", (6, 5), style="guard"),
-            Unit(4, "red", (6, 10), style="support"),
+            Unit(3, "red", spawn((6, 5)), style="guard"),
+            Unit(4, "red", spawn((6, 10)), style="support"),
         ]
         styles = self.rng.permutation(["pressure", "defend", "flank"])
         cells = [(22, 5), (23, 9), (19, 12)]
         self.enemies = [
-            Unit(103 + i, "blue", cell, style=str(styles[i]))
+            Unit(103 + i, "blue", spawn(cell), style=str(styles[i]))
             for i, cell in enumerate(cells)
         ]
         self.red_outpost_hp = 1500.0
         self.blue_outpost_hp = 1500.0
+        self.active_goal_idx: int | None = None
+        self.goal_lock_until = 0
         self.last_info: dict[str, Any] = {}
         return self.observe()
 
     def step(self, action: tuple[int, int, int] | list[int] | np.ndarray) -> tuple[dict[str, np.ndarray], float, bool, dict[str, Any]]:
-        goal_idx, target_idx, fire_mode = (int(x) for x in action)
-        reward = -0.01
+        requested_goal_idx, target_idx, fire_mode = (int(x) for x in action)
+        reward_terms: dict[str, float] = {
+            "time": -0.01,
+            "invalid_action": 0.0,
+            "damage_dealt": 0.0,
+            "damage_taken": 0.0,
+            "red_outpost_damage": 0.0,
+            "blue_outpost_damage": 0.0,
+            "red_outpost_control_loss": 0.0,
+            "goal_switch": 0.0,
+            "terminal": 0.0,
+        }
+        reward = reward_terms["time"]
         info: dict[str, Any] = {"invalid_action": False, "damage_dealt": 0.0, "damage_taken": 0.0}
+
+        # The policy still proposes a discrete anchor in this demo.  A short
+        # commitment window prevents rapid oscillation; continuous goal points
+        # will use the same lock/ slew-rate interface when that action head is
+        # introduced.
+        goal_idx = requested_goal_idx
+        goal_switch_blocked = False
+        if (self.active_goal_idx is not None and goal_idx != self.active_goal_idx and
+                self.step_count < self.goal_lock_until):
+            goal_idx = self.active_goal_idx
+            goal_switch_blocked = True
+        goal_switched = goal_idx != self.active_goal_idx
+        if goal_switched and 0 <= goal_idx < self.n_goals:
+            self.active_goal_idx = goal_idx
+            self.goal_lock_until = self.step_count + self.goal_hold_steps
+            reward_terms["goal_switch"] = -0.02
+            reward += reward_terms["goal_switch"]
+        info["requested_goal_idx"] = requested_goal_idx
+        info["executed_goal_idx"] = goal_idx
+        info["goal_switch"] = goal_switched
+        info["goal_switch_blocked"] = goal_switch_blocked
         threat = self._threat_layer(visible_only=False)
+        path_cost = 0.0
+        path_risk = 0.0
 
         # Goal execution is always delegated to the navigation backend.
         if 0 <= goal_idx < self.n_goals:
@@ -100,21 +143,27 @@ class SentryTacticalEnv:
                 self._follow_path_one_step(self.sentry, nav.path)
                 info["goal_name"] = self.anchor_names[goal_idx]
                 info["path_cost"] = nav.path_cost
+                path_cost = float(nav.path_cost)
+                path_risk = self._path_risk(nav.path, threat)
             else:
-                reward -= 0.20
+                reward_terms["invalid_action"] -= 0.20
+                reward += reward_terms["invalid_action"]
                 info["invalid_action"] = True
                 info["navigation"] = nav.reason
         else:
-            reward -= 0.20
+            reward_terms["invalid_action"] -= 0.20
+            reward += reward_terms["invalid_action"]
             info["invalid_action"] = True
 
         self.sentry.heat = max(0.0, self.sentry.heat - 16.0 * self.decision_seconds)
         if fire_mode == self.FIRE_ENGAGE and target_idx != self.NONE_TARGET:
             damage = self._sentry_fire(target_idx)
             info["damage_dealt"] = damage
-            reward += damage * 0.035
+            reward_terms["damage_dealt"] = damage * 0.035
+            reward += reward_terms["damage_dealt"]
         elif fire_mode not in (self.FIRE_HOLD, self.FIRE_ENGAGE):
-            reward -= 0.08
+            reward_terms["invalid_action"] -= 0.08
+            reward += -0.08
             info["invalid_action"] = True
 
         # All non-sentry agents are merely reactive simulation participants.
@@ -122,25 +171,42 @@ class SentryTacticalEnv:
         taken, red_outpost_damage = self._move_enemies_and_attack()
         info["damage_taken"] = taken
         info["red_outpost_damage"] = red_outpost_damage
-        reward -= taken * 0.030 + red_outpost_damage * 0.012
+        reward_terms["damage_taken"] = -taken * 0.030
+        reward_terms["red_outpost_damage"] = -red_outpost_damage * 0.012
+        reward += reward_terms["damage_taken"] + reward_terms["red_outpost_damage"]
 
         blue_delta, red_delta = self._update_outpost_control()
-        reward += blue_delta * 0.030 - red_delta * 0.018
+        reward_terms["blue_outpost_damage"] = blue_delta * 0.030
+        reward += reward_terms["blue_outpost_damage"]
+        reward_terms["red_outpost_control_loss"] = -red_delta * 0.018
+        reward += reward_terms["red_outpost_control_loss"]
+        info["blue_outpost_damage"] = blue_delta
+        info["red_outpost_control_loss"] = red_delta
         if not self.sentry.alive:
             reward -= 8.0
+            reward_terms["terminal"] -= 8.0
         self.step_count += 1
         done = (self.step_count >= self.horizon or not self.sentry.alive or
                 self.red_outpost_hp <= 0.0 or self.blue_outpost_hp <= 0.0)
         if done:
             if self.blue_outpost_hp <= 0.0 and self.red_outpost_hp > 0.0:
                 reward += 12.0
+                reward_terms["terminal"] += 12.0
                 info["outcome"] = "win"
             elif self.red_outpost_hp <= 0.0 or not self.sentry.alive:
                 reward -= 10.0
+                reward_terms["terminal"] -= 10.0
                 info["outcome"] = "loss"
             else:
                 info["outcome"] = "timeout"
-        info.update(red_outpost_hp=self.red_outpost_hp, blue_outpost_hp=self.blue_outpost_hp)
+        info.update(
+            red_outpost_hp=self.red_outpost_hp,
+            blue_outpost_hp=self.blue_outpost_hp,
+            path_cost=path_cost,
+            path_risk=path_risk,
+            total_cost=path_cost,
+            reward_terms=reward_terms,
+        )
         self.last_info = info
         return self.observe(), float(reward), bool(done), info
 
@@ -179,6 +245,14 @@ class SentryTacticalEnv:
             dist_red = self._distance(goal, self.map.red_outpost) / 30.0
             dist_blue = self._distance(goal, self.map.blue_outpost) / 30.0
             features.extend((float(nav.reachable), cost, risk, dist_red, dist_blue))
+
+        # Keep the policy distribution consistent with the execution layer:
+        # during a commitment window only the active goal is sampleable.  The
+        # step() check remains as a defensive guard for external callers.
+        if (self.active_goal_idx is not None and self.step_count < self.goal_lock_until and
+                0 <= self.active_goal_idx < self.n_goals):
+            goal_mask[:] = False
+            goal_mask[self.active_goal_idx] = True
 
         target_mask = np.zeros(self.n_targets, dtype=bool)
         for index, enemy in enumerate(self.enemies):

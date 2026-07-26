@@ -43,7 +43,7 @@ from ..algos.action_spec import get_spec
 
 # columns we actually read from timeseries, mapped to ascii
 _TS_FIELDS = ["x", "y", "z", "hp", "maxhp", "yaw", "power", "heat17",
-              "heat17_max", "heat42_max", "ammo17", "coin_left", "coin_total",
+              "heat17_max", "heat42", "heat42_max", "ammo17", "ammo42", "coin_left", "coin_total",
               "vuln"]
 
 
@@ -104,8 +104,10 @@ def load_game_arrays(con, game_id: int) -> GameArrays:
             power=sub["power"].to_numpy(np.float32),
             heat17=sub["heat17"].to_numpy(np.float32),
             heat17_max=sub["heat17_max"].to_numpy(np.float32),
+            heat42=sub["heat42"].to_numpy(np.float32),
             heat42_max=sub["heat42_max"].to_numpy(np.float32),
             ammo17=sub["ammo17"].to_numpy(np.float32),
+            ammo42=sub["ammo42"].to_numpy(np.float32),
             coin_left=sub["coin_left"].to_numpy(np.float32),
             coin_total=sub["coin_total"].to_numpy(np.float32),
             vuln=sub["vuln"].to_numpy(np.float32),
