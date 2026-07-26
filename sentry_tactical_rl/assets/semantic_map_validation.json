@@ -1,0 +1,203 @@
+{
+  "annotation": "sentry_tactical_rl/assets/demo_map.png",
+  "obstacle": "sentry_tactical_rl/assets/blackwhite_map.png",
+  "json": "sentry_tactical_rl/assets/semantic_map_aligned.json",
+  "image_shape_hw": [
+    774,
+    1400
+  ],
+  "region_count": 15,
+  "source_unclassified_pixels": 792550,
+  "json_unclassified_pixels": 793341,
+  "source_only_pixels": 2844,
+  "json_only_pixels": 2053,
+  "label_disagreement_pixels": 11,
+  "regions": [
+    {
+      "id": "base_1",
+      "kind": "base",
+      "source_pixels": 26110,
+      "json_pixels": 25920,
+      "intersection_pixels": 25800,
+      "iou": 0.983607,
+      "precision": 0.99537,
+      "recall": 0.988127,
+      "json_on_black_obstacle_pixels": 7953,
+      "json_on_black_obstacle_ratio": 0.306829
+    },
+    {
+      "id": "base_2",
+      "kind": "base",
+      "source_pixels": 25878,
+      "json_pixels": 25651,
+      "intersection_pixels": 25591,
+      "iou": 0.986622,
+      "precision": 0.997661,
+      "recall": 0.988909,
+      "json_on_black_obstacle_pixels": 8116,
+      "json_on_black_obstacle_ratio": 0.316401
+    },
+    {
+      "id": "outpost_1",
+      "kind": "outpost",
+      "source_pixels": 4147,
+      "json_pixels": 4147,
+      "intersection_pixels": 4100,
+      "iou": 0.977587,
+      "precision": 0.988667,
+      "recall": 0.988667,
+      "json_on_black_obstacle_pixels": 1656,
+      "json_on_black_obstacle_ratio": 0.399325
+    },
+    {
+      "id": "outpost_2",
+      "kind": "outpost",
+      "source_pixels": 3805,
+      "json_pixels": 3774,
+      "intersection_pixels": 3696,
+      "iou": 0.951841,
+      "precision": 0.979332,
+      "recall": 0.971353,
+      "json_on_black_obstacle_pixels": 1513,
+      "json_on_black_obstacle_ratio": 0.400901
+    },
+    {
+      "id": "fortress_1",
+      "kind": "fortress",
+      "source_pixels": 9395,
+      "json_pixels": 9401,
+      "intersection_pixels": 9264,
+      "iou": 0.971884,
+      "precision": 0.985427,
+      "recall": 0.986056,
+      "json_on_black_obstacle_pixels": 0,
+      "json_on_black_obstacle_ratio": 0.0
+    },
+    {
+      "id": "fortress_2",
+      "kind": "fortress",
+      "source_pixels": 9473,
+      "json_pixels": 9441,
+      "intersection_pixels": 9384,
+      "iou": 0.98468,
+      "precision": 0.993963,
+      "recall": 0.990605,
+      "json_on_black_obstacle_pixels": 0,
+      "json_on_black_obstacle_ratio": 0.0
+    },
+    {
+      "id": "healing_1",
+      "kind": "healing",
+      "source_pixels": 5703,
+      "json_pixels": 5712,
+      "intersection_pixels": 5572,
+      "iou": 0.95362,
+      "precision": 0.97549,
+      "recall": 0.97703,
+      "json_on_black_obstacle_pixels": 241,
+      "json_on_black_obstacle_ratio": 0.042192
+    },
+    {
+      "id": "healing_2",
+      "kind": "healing",
+      "source_pixels": 5731,
+      "json_pixels": 5908,
+      "intersection_pixels": 5731,
+      "iou": 0.970041,
+      "precision": 0.970041,
+      "recall": 1.0,
+      "json_on_black_obstacle_pixels": 201,
+      "json_on_black_obstacle_ratio": 0.034022
+    },
+    {
+      "id": "central_highland_1",
+      "kind": "central_highland",
+      "source_pixels": 157634,
+      "json_pixels": 157624,
+      "intersection_pixels": 156717,
+      "iou": 0.988495,
+      "precision": 0.994246,
+      "recall": 0.994183,
+      "json_on_black_obstacle_pixels": 41998,
+      "json_on_black_obstacle_ratio": 0.266444
+    },
+    {
+      "id": "tunnel_gain_1",
+      "kind": "tunnel_gain",
+      "source_pixels": 7388,
+      "json_pixels": 7197,
+      "intersection_pixels": 7190,
+      "iou": 0.972279,
+      "precision": 0.999027,
+      "recall": 0.9732,
+      "json_on_black_obstacle_pixels": 245,
+      "json_on_black_obstacle_ratio": 0.034042
+    },
+    {
+      "id": "tunnel_gain_2",
+      "kind": "tunnel_gain",
+      "source_pixels": 2581,
+      "json_pixels": 2707,
+      "intersection_pixels": 2581,
+      "iou": 0.953454,
+      "precision": 0.953454,
+      "recall": 1.0,
+      "json_on_black_obstacle_pixels": 0,
+      "json_on_black_obstacle_ratio": 0.0
+    },
+    {
+      "id": "tunnel_gain_3",
+      "kind": "tunnel_gain",
+      "source_pixels": 3003,
+      "json_pixels": 3051,
+      "intersection_pixels": 2970,
+      "iou": 0.963035,
+      "precision": 0.973451,
+      "recall": 0.989011,
+      "json_on_black_obstacle_pixels": 11,
+      "json_on_black_obstacle_ratio": 0.003605
+    },
+    {
+      "id": "tunnel_gain_4",
+      "kind": "tunnel_gain",
+      "source_pixels": 7400,
+      "json_pixels": 7242,
+      "intersection_pixels": 7189,
+      "iou": 0.964578,
+      "precision": 0.992682,
+      "recall": 0.971486,
+      "json_on_black_obstacle_pixels": 909,
+      "json_on_black_obstacle_ratio": 0.125518
+    },
+    {
+      "id": "undulating_road_1",
+      "kind": "undulating_road",
+      "source_pixels": 11097,
+      "json_pixels": 11008,
+      "intersection_pixels": 10935,
+      "iou": 0.978962,
+      "precision": 0.993368,
+      "recall": 0.985401,
+      "json_on_black_obstacle_pixels": 128,
+      "json_on_black_obstacle_ratio": 0.011628
+    },
+    {
+      "id": "undulating_road_2",
+      "kind": "undulating_road",
+      "source_pixels": 11705,
+      "json_pixels": 11476,
+      "intersection_pixels": 11475,
+      "iou": 0.980267,
+      "precision": 0.999913,
+      "recall": 0.98035,
+      "json_on_black_obstacle_pixels": 603,
+      "json_on_black_obstacle_ratio": 0.052544
+    }
+  ],
+  "diagnostic_legend": {
+    "green": "source and JSON agree",
+    "red": "source-only; JSON missed annotation pixels",
+    "blue": "JSON-only; polygon grew beyond annotation",
+    "yellow": "both classified but kind differs"
+  }
+}

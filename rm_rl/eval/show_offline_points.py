@@ -237,8 +237,8 @@ def main():
     ap.add_argument("--run", default="rm_runs/infantry_iql_tactical")
     ap.add_argument(
         "--map",
-        default="/home/julia/workspace/Radar-Station/src/battlefield_visualizer/config/2026RMUC.png",
-        help="landscape RMUC map; use the unrotated image for the 28 x 15 m log frame",
+        default="sentry_tactical_rl/assets/semantic_map_aligned.png",
+        help="aligned black/white obstacle map with tactical semantic zones",
     )
     ap.add_argument("--db", default="dataset/rmuc_2026_region_dataset.sqlite")
     ap.add_argument("--episode", type=int, default=None)
