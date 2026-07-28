@@ -243,7 +243,8 @@ def build_obs(game: GameArrays, camp: str, agent_type: str,
               t_max_ref: float = MATCH_SECONDS,
               vis_radius: float = 0.0, vis_dropout: float = 0.0,
               rng=None, vis_map=None,
-              team_feat: Optional[np.ndarray] = None) -> np.ndarray:
+              team_feat: Optional[np.ndarray] = None,
+              time_values: Optional[np.ndarray] = None) -> np.ndarray:
     """Return observation array [T, obs_dim] for `agent_type` of `camp`.
 
     Observability: the default ``vis_radius=0`` preserves the full referee/radar
@@ -255,6 +256,9 @@ def build_obs(game: GameArrays, camp: str, agent_type: str,
     `vis_map` is an optional `vis_map.VisibilityMap`: a per-enemy empirical
     engagement prior standing in for line-of-sight, which the log does not
     record.  `team_feat` is the 6-D leak-safe opponent-strength prior.
+    `time_values`, when supplied by a live/sim adapter, gives the physical
+    timestamp for each row; the historical dataset keeps its original 1..T
+    sequence by leaving it unset.
     """
     T = game.T
     mirror = camp == S.CAMP_BLUE
@@ -287,7 +291,10 @@ def build_obs(game: GameArrays, camp: str, agent_type: str,
     feats.append(ego.heat42_max / S.HEAT42_MAX_REF)          # 42mm upgrade tier
 
     # --- time block (2) ---
-    tvec = np.arange(1, T + 1, dtype=np.float32)
+    tvec = (np.arange(1, T + 1, dtype=np.float32) if time_values is None
+            else np.asarray(time_values, dtype=np.float32))
+    if tvec.shape != (T,):
+        raise ValueError("time_values must have one entry per GameArrays timestep")
     feats.append(tvec / t_max_ref)
     feats.append(np.clip(1.0 - tvec / t_max_ref, 0.0, 1.0))
 

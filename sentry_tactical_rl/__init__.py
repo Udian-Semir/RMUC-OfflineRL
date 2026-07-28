@@ -5,5 +5,6 @@ goal is always validated and executed by a navigation backend.
 """
 
 from .env import SentryTacticalEnv
+from .match_rules import MatchState
 
-__all__ = ["SentryTacticalEnv"]
+__all__ = ["MatchState", "SentryTacticalEnv"]

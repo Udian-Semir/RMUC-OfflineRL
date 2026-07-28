@@ -51,7 +51,21 @@ def tactical_action_json(decision: TacticalDecision, semantic_map: SemanticMap) 
         raise ValueError("goal_index outside configured semantic anchors")
     goal_name = semantic_map.anchor_names[decision.goal_index]
     goal = semantic_map.anchors[goal_name]
-    has_target = decision.target_index != SentryTacticalEnv.NONE_TARGET
+    target_type = "SEMANTIC_ZONE"
+    roster_index: int | None = None
+    semantic_zone: str | None = goal_name
+    if 0 <= decision.target_index < SentryTacticalEnv.ROBOT_TARGETS:
+        target_type = "ENEMY_ROBOT"
+        roster_index = int(decision.target_index)
+        semantic_zone = None
+    elif decision.target_index == SentryTacticalEnv.BLUE_OUTPOST_TARGET:
+        target_type = "OUTPOST"
+        semantic_zone = None
+    elif decision.target_index == SentryTacticalEnv.BLUE_BASE_TARGET:
+        target_type = "BASE"
+        semantic_zone = None
+    elif decision.target_index != SentryTacticalEnv.NONE_TARGET:
+        raise ValueError("target_index outside the tactical action schema")
     constraints = ["AVOID_EXPOSURE", "ALLOW_SEMANTIC_PRIOR"]
     if decision.fire_mode == SentryTacticalEnv.FIRE_ENGAGE:
         constraints.append("ALLOW_FIRE")
@@ -60,9 +74,9 @@ def tactical_action_json(decision: TacticalDecision, semantic_map: SemanticMap) 
         "ttl_ms": int(decision.ttl_ms),
         "type": _ACTION_TYPE.get(decision.skill, "GO_TO"),
         "target": {
-            "type": "ENEMY_ROBOT" if has_target else "SEMANTIC_ZONE",
-            "roster_index": int(decision.target_index) if has_target else None,
-            "semantic_zone": None if has_target else goal_name,
+            "type": target_type,
+            "roster_index": roster_index,
+            "semantic_zone": semantic_zone,
             "goal_map_m": {"x": goal[0] + 0.5, "y": goal[1] + 0.5, "yaw_deg": None},
         },
         "constraints": constraints,

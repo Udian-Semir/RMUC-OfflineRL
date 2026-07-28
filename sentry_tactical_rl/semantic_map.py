@@ -43,6 +43,12 @@ class SemanticMap:
     red_base: Cell = (1, 7)
     blue_base: Cell = (26, 7)
     semantic_layers: dict[str, np.ndarray] = field(default_factory=dict)
+    # The merged layers above feed the CNN.  Keep individual regions as well:
+    # zone ownership and ordered interactions cannot be recovered from a
+    # single union mask once two same-kind regions overlap in the raster.
+    region_masks: dict[str, np.ndarray] = field(default_factory=dict)
+    region_kinds: dict[str, str] = field(default_factory=dict)
+    region_centers: dict[str, Cell] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         shape = (self.height, self.width)
@@ -53,6 +59,13 @@ class SemanticMap:
         for name, layer in self.semantic_layers.items():
             if layer.shape != shape:
                 raise ValueError(f"semantic layer {name!r} must have shape {shape}")
+        for name, layer in self.region_masks.items():
+            if layer.shape != shape:
+                raise ValueError(f"region mask {name!r} must have shape {shape}")
+            if name not in self.region_kinds:
+                raise ValueError(f"region mask {name!r} has no kind")
+        if set(self.region_kinds) - set(self.region_masks):
+            raise ValueError("region kinds must refer to region masks")
         for name, cell in self.anchors.items():
             if not self.is_free(cell):
                 raise ValueError(f"anchor {name!r} is not traversable: {cell}")
@@ -173,10 +186,18 @@ class SemanticMap:
             # Transparent padding is outside the usable field and must not
             # become a traversable route at the tactical grid boundary.
             blocked_source |= image[:, :, 3] == 0
+        # Input images use conventional top-left pixels while the JSON
+        # declares a lower-left physical origin.  Store all tactical cells in
+        # the declared world orientation so goals, semantic masks and exported
+        # map poses use the same y-axis.
+        blocked_source = np.flipud(blocked_source)
         occupancy = cv2.resize(blocked_source.astype(np.float32), (width, height), interpolation=cv2.INTER_AREA)
         hard = occupancy >= occupancy_threshold
 
         semantic_layers: dict[str, np.ndarray] = {}
+        region_masks: dict[str, np.ndarray] = {}
+        region_kinds: dict[str, str] = {}
+        region_centers: dict[str, Cell] = {}
         anchors: dict[str, Cell] = {}
         objective_centers: dict[str, list[tuple[float, float]]] = {"base": [], "outpost": []}
         for region in payload.get("regions", []):
@@ -185,31 +206,47 @@ class SemanticMap:
             if len(points) < 3:
                 continue
             px = np.rint(points[:, 0] / field_x * (width - 1)).astype(np.int32)
-            py = np.rint((1.0 - points[:, 1] / field_y) * (height - 1)).astype(np.int32)
+            py = np.rint(points[:, 1] / field_y * (height - 1)).astype(np.int32)
             mask = semantic_layers.setdefault(kind, np.zeros((height, width), dtype=bool))
-            cv2.fillPoly(mask.view(np.uint8), [np.stack((px, py), axis=1)], 1)
+            polygon = np.stack((px, py), axis=1)
+            cv2.fillPoly(mask.view(np.uint8), [polygon], 1)
+            region_id = str(region.get("id", f"{kind}_{len(region_masks) + 1}"))
+            region_mask = np.zeros((height, width), dtype=bool)
+            cv2.fillPoly(region_mask.view(np.uint8), [polygon], 1)
+            region_masks[region_id] = region_mask
+            region_kinds[region_id] = kind
             center = (float(points[:, 0].mean()), float(points[:, 1].mean()))
+            center_cell = (
+                int(np.clip(np.floor(center[0]), 0, width - 1)),
+                int(np.clip(np.floor(center[1]), 0, height - 1)),
+            )
+            region_centers[region_id] = center_cell
             if kind in objective_centers:
                 objective_centers[kind].append(center)
-            requested = (int(np.floor(center[0])), int(np.floor(center[1])))
-            requested = (int(np.clip(requested[0], 0, width - 1)), int(np.clip(requested[1], 0, height - 1)))
+            requested = center_cell
             candidate = _nearest_free(hard, requested)
             if candidate is not None:
-                anchors[str(region.get("id", f"{kind}_{len(anchors) + 1}"))] = candidate
+                anchors[region_id] = candidate
 
         # Explicitly annotated as unusable by the sentry.  This is a policy
         # passability rule, not a claim that every robot has the same chassis.
         hard |= semantic_layers.get("undulating_road", np.zeros_like(hard))
+        anchors = {
+            name: candidate
+            for name, cell in anchors.items()
+            if (candidate := _nearest_free(hard, cell)) is not None
+        }
 
         def objective(kind: str, side: str, fallback: Cell) -> Cell:
             centers = sorted(objective_centers.get(kind, []), key=lambda value: value[0])
             if not centers:
                 return fallback
             point = centers[0] if side == "red" else centers[-1]
-            return (
+            requested = (
                 int(np.clip(np.floor(point[0]), 0, width - 1)),
                 int(np.clip(np.floor(point[1]), 0, height - 1)),
             )
+            return _nearest_free(hard, requested) or fallback
 
         return cls(
             width=width,
@@ -222,6 +259,9 @@ class SemanticMap:
             red_base=objective("base", "red", (1, 7)),
             blue_base=objective("base", "blue", (26, 7)),
             semantic_layers={name: layer.astype(np.float32) for name, layer in semantic_layers.items()},
+            region_masks=region_masks,
+            region_kinds=region_kinds,
+            region_centers=region_centers,
         )
 
     @property
@@ -235,6 +275,34 @@ class SemanticMap:
     def is_free(self, cell: Cell) -> bool:
         x, y = cell
         return self.in_bounds(cell) and not bool(self.hard_blocked[y, x])
+
+    def region_ids_at(self, cell: Cell, *, kind: str | None = None) -> tuple[str, ...]:
+        """Return individual semantic regions containing ``cell``."""
+        if not self.in_bounds(cell):
+            return ()
+        x, y = cell
+        return tuple(
+            name for name, mask in self.region_masks.items()
+            if (kind is None or self.region_kinds[name] == kind) and bool(mask[y, x])
+        )
+
+    def has_semantic_kind(self, cell: Cell, kind: str) -> bool:
+        if not self.in_bounds(cell):
+            return False
+        layer = self.semantic_layers.get(kind)
+        x, y = cell
+        return layer is not None and bool(layer[y, x])
+
+    def region_owner(self, region_id: str) -> str | None:
+        """Infer red/blue ownership from the nearest configured base center."""
+        center = self.region_centers.get(region_id)
+        if center is None:
+            return None
+        red_distance = float(np.hypot(center[0] - self.red_base[0], center[1] - self.red_base[1]))
+        blue_distance = float(np.hypot(center[0] - self.blue_base[0], center[1] - self.blue_base[1]))
+        if red_distance == blue_distance:
+            return None
+        return "red" if red_distance < blue_distance else "blue"
 
     def nearest_free(self, cell: Cell, max_radius: int = 12) -> Cell | None:
         return _nearest_free(self.hard_blocked, cell, max_radius)

@@ -59,7 +59,9 @@ class PPOTrainer:
             "damage_taken": [],
             "blue_outpost_damage": [],
             "red_outpost_damage": [],
-            "red_outpost_control_loss": [],
+            "blue_base_damage": [],
+            "red_base_damage": [],
+            "healing": [],
             "invalid_action": [],
             "goal_switch": [],
             "goal_switch_blocked": [],
@@ -77,7 +79,9 @@ class PPOTrainer:
             telemetry["damage_taken"].append(float(info.get("damage_taken", 0.0)))
             telemetry["blue_outpost_damage"].append(float(info.get("blue_outpost_damage", 0.0)))
             telemetry["red_outpost_damage"].append(float(info.get("red_outpost_damage", 0.0)))
-            telemetry["red_outpost_control_loss"].append(float(info.get("red_outpost_control_loss", 0.0)))
+            telemetry["blue_base_damage"].append(float(info.get("blue_base_damage", 0.0)))
+            telemetry["red_base_damage"].append(float(info.get("red_base_damage", 0.0)))
+            telemetry["healing"].append(float(info.get("reward_terms", {}).get("healing", 0.0)))
             telemetry["invalid_action"].append(float(bool(info.get("invalid_action", False))))
             telemetry["goal_switch"].append(float(bool(info.get("goal_switch", False))))
             telemetry["goal_switch_blocked"].append(float(bool(info.get("goal_switch_blocked", False))))

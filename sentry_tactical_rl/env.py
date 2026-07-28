@@ -11,6 +11,7 @@ from typing import Any
 
 import numpy as np
 
+from .match_rules import MatchState, Team
 from .navigation import GridNavigationBackend
 from .semantic_map import Cell, SemanticMap
 
@@ -25,6 +26,9 @@ class Unit:
     heat: float = 0.0
     ammo: int = 180
     style: str = ""
+    role: str = ""
+    tunnel_defense_until_s: float = 0.0
+    tunnel_cooling_until_s: float = 0.0
 
     @property
     def alive(self) -> bool:
@@ -41,7 +45,10 @@ class SentryTacticalEnv:
 
     FIRE_HOLD = 0
     FIRE_ENGAGE = 1
-    NONE_TARGET = 3
+    ROBOT_TARGETS = 3
+    BLUE_OUTPOST_TARGET = 3
+    BLUE_BASE_TARGET = 4
+    NONE_TARGET = 5
 
     def __init__(
         self,
@@ -66,7 +73,7 @@ class SentryTacticalEnv:
         self.n_targets = self.NONE_TARGET + 1
         self.map_channels = self.map.raster_base().shape[0] + 4
         # scalar + per-goal + per-enemy + per-ally feature layout
-        self.vector_dim = 7 + self.n_goals * 5 + 3 * 5 + 2 * 4
+        self.vector_dim = 20 + self.n_goals * 5 + self.ROBOT_TARGETS * 5 + 2 * 4
         self.reset(seed=seed)
 
     def reset(self, *, seed: int | None = None) -> dict[str, np.ndarray]:
@@ -77,26 +84,37 @@ class SentryTacticalEnv:
         def spawn(cell: Cell) -> Cell:
             return self.map.nearest_free(cell) or self.map.clamp_cell(cell)
 
-        self.sentry = Unit(7, "red", spawn((3, 7)), hp=400.0, max_hp=400.0, ammo=260)
+        self.sentry = Unit(7, "red", spawn((3, 7)), hp=400.0, max_hp=400.0, ammo=300, role="sentry")
         self.allies = [
-            Unit(3, "red", spawn((6, 5)), style="guard"),
-            Unit(4, "red", spawn((6, 10)), style="support"),
+            Unit(3, "red", spawn((6, 5)), style="guard", role="infantry3"),
+            Unit(4, "red", spawn((6, 10)), style="support", role="infantry4"),
         ]
         styles = self.rng.permutation(["pressure", "defend", "flank"])
         cells = [(22, 5), (23, 9), (19, 12)]
         self.enemies = [
-            Unit(103 + i, "blue", spawn(cell), style=str(styles[i]))
+            Unit(103 + i, "blue", spawn(cell), style=str(styles[i]), role=("hero", "infantry3", "sentry")[i])
             for i, cell in enumerate(cells)
         ]
-        self.red_outpost_hp = 1500.0
-        self.blue_outpost_hp = 1500.0
+        self.match = MatchState(duration_s=self.horizon * self.decision_seconds)
         self.active_goal_idx: int | None = None
         self.goal_lock_until = 0
+        self.rebuild_hold_s: dict[Team, float] = {"red": 0.0, "blue": 0.0}
+        self._sentry_death_reported = False
+        self._last_fire_result = {"robot": 0.0, "blue_outpost": 0.0, "blue_base": 0.0}
         self.last_info: dict[str, Any] = {}
         return self.observe()
 
+    @property
+    def red_outpost_hp(self) -> float:
+        return self.match.red.outpost_hp
+
+    @property
+    def blue_outpost_hp(self) -> float:
+        return self.match.blue.outpost_hp
+
     def step(self, action: tuple[int, int, int] | list[int] | np.ndarray) -> tuple[dict[str, np.ndarray], float, bool, dict[str, Any]]:
         requested_goal_idx, target_idx, fire_mode = (int(x) for x in action)
+        self._last_fire_result = {"robot": 0.0, "blue_outpost": 0.0, "blue_base": 0.0}
         reward_terms: dict[str, float] = {
             "time": -0.01,
             "invalid_action": 0.0,
@@ -104,7 +122,9 @@ class SentryTacticalEnv:
             "damage_taken": 0.0,
             "red_outpost_damage": 0.0,
             "blue_outpost_damage": 0.0,
-            "red_outpost_control_loss": 0.0,
+            "red_base_damage": 0.0,
+            "blue_base_damage": 0.0,
+            "healing": 0.0,
             "goal_switch": 0.0,
             "terminal": 0.0,
         }
@@ -155,8 +175,8 @@ class SentryTacticalEnv:
             reward += reward_terms["invalid_action"]
             info["invalid_action"] = True
 
-        self.sentry.heat = max(0.0, self.sentry.heat - 16.0 * self.decision_seconds)
-        if fire_mode == self.FIRE_ENGAGE and target_idx != self.NONE_TARGET:
+        self.sentry.heat = max(0.0, self.sentry.heat - self._heat_cooling_rate(self.sentry) * self.decision_seconds)
+        if self.sentry.alive and fire_mode == self.FIRE_ENGAGE and target_idx != self.NONE_TARGET:
             damage = self._sentry_fire(target_idx)
             info["damage_dealt"] = damage
             reward_terms["damage_dealt"] = damage * 0.035
@@ -167,41 +187,60 @@ class SentryTacticalEnv:
             info["invalid_action"] = True
 
         # All non-sentry agents are merely reactive simulation participants.
-        self._move_allies_and_attack()
-        taken, red_outpost_damage = self._move_enemies_and_attack()
+        ally_damage = self._move_allies_and_attack()
+        taken, red_outpost_damage, red_base_damage = self._move_enemies_and_attack()
         info["damage_taken"] = taken
         info["red_outpost_damage"] = red_outpost_damage
+        info["red_base_damage"] = red_base_damage
         reward_terms["damage_taken"] = -taken * 0.030
         reward_terms["red_outpost_damage"] = -red_outpost_damage * 0.012
-        reward += reward_terms["damage_taken"] + reward_terms["red_outpost_damage"]
+        reward_terms["red_base_damage"] = -red_base_damage * 0.020
+        reward += (reward_terms["damage_taken"] + reward_terms["red_outpost_damage"] +
+                   reward_terms["red_base_damage"])
 
-        blue_delta, red_delta = self._update_outpost_control()
-        reward_terms["blue_outpost_damage"] = blue_delta * 0.030
+        blue_outpost_damage = self._last_fire_result["blue_outpost"] + ally_damage["outpost"]
+        blue_base_damage = self._last_fire_result["blue_base"] + ally_damage["base"]
+        reward_terms["blue_outpost_damage"] = blue_outpost_damage * 0.030
         reward += reward_terms["blue_outpost_damage"]
-        reward_terms["red_outpost_control_loss"] = -red_delta * 0.018
-        reward += reward_terms["red_outpost_control_loss"]
-        info["blue_outpost_damage"] = blue_delta
-        info["red_outpost_control_loss"] = red_delta
-        if not self.sentry.alive:
+        reward_terms["blue_base_damage"] = blue_base_damage * 0.025
+        reward += reward_terms["blue_base_damage"]
+        info["blue_outpost_damage"] = blue_outpost_damage
+        info["blue_base_damage"] = blue_base_damage
+
+        healing = self._apply_semantic_effects()
+        reward_terms["healing"] = healing * 0.003
+        reward += reward_terms["healing"]
+        self._update_rebuild_progress()
+
+        if not self.sentry.alive and not self._sentry_death_reported:
             reward -= 8.0
             reward_terms["terminal"] -= 8.0
+            self._sentry_death_reported = True
+        self.match.advance(self.decision_seconds)
         self.step_count += 1
-        done = (self.step_count >= self.horizon or not self.sentry.alive or
-                self.red_outpost_hp <= 0.0 or self.blue_outpost_hp <= 0.0)
+        done = self.match.is_terminal()
         if done:
-            if self.blue_outpost_hp <= 0.0 and self.red_outpost_hp > 0.0:
+            outcome = self.match.outcome(
+                red_total_hp=self._team_total_hp("red"),
+                blue_total_hp=self._team_total_hp("blue"),
+            )
+            info["outcome"] = outcome
+            if outcome == "red_win":
                 reward += 12.0
                 reward_terms["terminal"] += 12.0
-                info["outcome"] = "win"
-            elif self.red_outpost_hp <= 0.0 or not self.sentry.alive:
+            elif outcome == "blue_win":
                 reward -= 10.0
                 reward_terms["terminal"] -= 10.0
-                info["outcome"] = "loss"
-            else:
-                info["outcome"] = "timeout"
         info.update(
             red_outpost_hp=self.red_outpost_hp,
             blue_outpost_hp=self.blue_outpost_hp,
+            red_base_hp=self.match.red.base_hp,
+            blue_base_hp=self.match.blue.base_hp,
+            red_base_shield=self.match.red.base_shield,
+            blue_base_shield=self.match.blue.base_shield,
+            match_time_s=self.match.time_s,
+            phase_flags=self.match.phase_flags,
+            rebuild_hold_s=dict(self.rebuild_hold_s),
             path_cost=path_cost,
             path_risk=path_risk,
             total_cost=path_cost,
@@ -223,13 +262,27 @@ class SentryTacticalEnv:
         }
 
     def _vector_features(self, threat: np.ndarray, visible: list[bool]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        phases = self.match.phase_flags
         features: list[float] = [
             self.sentry.hp / self.sentry.max_hp,
             self.sentry.heat / 260.0,
-            self.sentry.ammo / 260.0,
+            self.sentry.ammo / 300.0,
             self.red_outpost_hp / 1500.0,
             self.blue_outpost_hp / 1500.0,
-            self.step_count / self.horizon,
+            self.match.red.base_hp / self.match.red.base_max_hp,
+            self.match.blue.base_hp / self.match.blue.base_max_hp,
+            self.match.red.base_shield / 150.0,
+            self.match.blue.base_shield / 150.0,
+            float(self.match.red.outpost_destroyed_ever),
+            float(self.match.blue.outpost_destroyed_ever),
+            min(self.match.time_s / self.match.duration_s, 1.0),
+            float(phases["post_60_pressure"]),
+            float(phases["large_energy_phase"]),
+            float(phases["outpost_rebuild_closed"]),
+            float(self.match.outpost_armor_rotating("red")),
+            float(self.match.outpost_armor_rotating("blue")),
+            self._unit_defense_bonus(self.sentry),
+            min(self._heat_cooling_rate(self.sentry) / 105.0, 1.0),
             float(sum(unit.alive for unit in self.allies)) / len(self.allies),
         ]
         goal_mask = np.zeros(self.n_goals, dtype=bool)
@@ -264,6 +317,11 @@ class SentryTacticalEnv:
                 features.extend((dx, dy, enemy.hp / enemy.max_hp, distance, 1.0))
             else:
                 features.extend((0.0, 0.0, 0.0, 1.0, 0.0))
+        # Buildings are known map objects.  The base target remains masked in
+        # this first policy version, while MatchState still enforces its legal
+        # attackability for scripted agents and direct integration tests.
+        target_mask[self.BLUE_OUTPOST_TARGET] = self.match.blue.outpost_alive
+        target_mask[self.BLUE_BASE_TARGET] = False
         target_mask[self.NONE_TARGET] = True
 
         for ally in self.allies:
@@ -305,25 +363,46 @@ class SentryTacticalEnv:
         return np.clip(out, 0.0, 2.0)
 
     def _sentry_fire(self, target_idx: int) -> float:
-        if not (0 <= target_idx < len(self.enemies)):
+        if not self.sentry.alive or self.sentry.ammo <= 0 or self.sentry.heat + 15.0 > 260.0:
             return 0.0
-        target = self.enemies[target_idx]
-        if (not target.alive or not self._visible(target) or self.sentry.ammo <= 0 or
-                self.sentry.heat > 235.0):
+        target_cell: Cell
+        target: Unit | None = None
+        building: str | None = None
+        if 0 <= target_idx < self.ROBOT_TARGETS:
+            target = self.enemies[target_idx]
+            if not target.alive or not self._visible(target):
+                return 0.0
+            target_cell = target.cell
+        elif target_idx == self.BLUE_OUTPOST_TARGET and self.match.blue.outpost_alive:
+            building = "outpost"
+            target_cell = self._structure_cell("blue", building)
+        elif target_idx == self.BLUE_BASE_TARGET:
+            building = "base"
+            target_cell = self._structure_cell("blue", building)
+        else:
             return 0.0
-        distance = self._distance(self.sentry.cell, target.cell)
-        if distance > 8.0:
+        distance = self._distance(self.sentry.cell, target_cell)
+        if distance > 8.0 or not self.map.line_of_sight(self.sentry.cell, target_cell):
             return 0.0
         self.sentry.ammo -= 1
         self.sentry.heat += 15.0
         hit_probability = 0.83 * np.exp(-0.07 * distance)
-        if self.rng.random() < hit_probability:
-            damage = min(20.0, target.hp)
-            target.hp -= damage
+        if self.rng.random() >= hit_probability:
+            return 0.0
+        if target is not None:
+            damage = self._deal_robot_damage(self.sentry, target, 20.0)
+            self._last_fire_result["robot"] = damage
             return damage
-        return 0.0
+        if building == "outpost":
+            result = self.match.apply_outpost_damage("red", "blue", 20.0)
+            self._last_fire_result["blue_outpost"] = result.applied
+            return result.applied
+        result = self.match.apply_base_damage("red", "blue", 20.0)
+        self._last_fire_result["blue_base"] = result.applied
+        return result.applied
 
-    def _move_allies_and_attack(self) -> None:
+    def _move_allies_and_attack(self) -> dict[str, float]:
+        building_damage = {"outpost": 0.0, "base": 0.0}
         for ally in self.allies:
             if not ally.alive:
                 continue
@@ -336,15 +415,16 @@ class SentryTacticalEnv:
             self._move_towards(ally, goal)
             if self._distance(ally.cell, target.cell) < 6.0 and self.map.line_of_sight(ally.cell, target.cell):
                 if self.rng.random() < 0.42:
-                    target.hp -= min(10.0, target.hp)
+                    self._deal_robot_damage(ally, target, 10.0)
+        return building_damage
 
-    def _move_enemies_and_attack(self) -> tuple[float, float]:
-        sentry_damage, outpost_damage = 0.0, 0.0
+    def _move_enemies_and_attack(self) -> tuple[float, float, float]:
+        sentry_damage, outpost_damage, base_damage = 0.0, 0.0, 0.0
         for enemy in self.enemies:
             if not enemy.alive:
                 continue
             if enemy.style == "pressure":
-                goal = self.map.red_outpost
+                goal = self.map.red_outpost if self.match.red.outpost_alive else self.map.red_base
             elif enemy.style == "defend":
                 goal = self.map.blue_outpost
             else:
@@ -352,27 +432,110 @@ class SentryTacticalEnv:
             self._move_towards(enemy, goal)
             if self.sentry.alive and self._distance(enemy.cell, self.sentry.cell) < 7.0 and self.map.line_of_sight(enemy.cell, self.sentry.cell):
                 if self.rng.random() < 0.38:
-                    damage = min(14.0, self.sentry.hp)
-                    self.sentry.hp -= damage
+                    damage = self._deal_robot_damage(enemy, self.sentry, 14.0)
                     sentry_damage += damage
-            if self._distance(enemy.cell, self.map.red_outpost) < 2.5:
-                damage = 5.0
-                self.red_outpost_hp = max(0.0, self.red_outpost_hp - damage)
-                outpost_damage += damage
-        return sentry_damage, outpost_damage
+            target_kind = "outpost" if self.match.red.outpost_alive else "base"
+            target_cell = self._structure_cell("red", target_kind)
+            if self._distance(enemy.cell, target_cell) <= 2.5 and self.map.line_of_sight(enemy.cell, target_cell):
+                if target_kind == "outpost":
+                    result = self.match.apply_outpost_damage("blue", "red", 5.0)
+                    outpost_damage += result.applied
+                else:
+                    result = self.match.apply_base_damage("blue", "red", 5.0)
+                    base_damage += result.applied
+        return sentry_damage, outpost_damage, base_damage
 
-    def _update_outpost_control(self) -> tuple[float, float]:
-        red_units = [self.sentry, *self.allies]
-        blue_units = self.enemies
-        red_at_blue = sum(unit.alive and self._distance(unit.cell, self.map.blue_outpost) < 3.0 for unit in red_units)
-        blue_at_blue = sum(unit.alive and self._distance(unit.cell, self.map.blue_outpost) < 3.0 for unit in blue_units)
-        blue_delta = max(0.0, 6.0 * (red_at_blue - blue_at_blue))
-        self.blue_outpost_hp = max(0.0, self.blue_outpost_hp - blue_delta)
-        red_at_red = sum(unit.alive and self._distance(unit.cell, self.map.red_outpost) < 3.0 for unit in red_units)
-        blue_at_red = sum(unit.alive and self._distance(unit.cell, self.map.red_outpost) < 3.0 for unit in blue_units)
-        red_delta = max(0.0, 6.0 * (blue_at_red - red_at_red))
-        self.red_outpost_hp = max(0.0, self.red_outpost_hp - red_delta)
-        return blue_delta, red_delta
+    def _structure_cell(self, side: Team, kind: str) -> Cell:
+        if kind not in ("outpost", "base"):
+            raise ValueError(f"unknown structure kind: {kind}")
+        cell = getattr(self.map, f"{side}_{kind}")
+        return self.map.nearest_free(cell) or self.map.clamp_cell(cell)
+
+    def _deal_robot_damage(self, attacker: Unit, target: Unit, raw_damage: float) -> float:
+        multiplier = 1.0 - self._unit_defense_bonus(target)
+        damage = min(float(round(raw_damage * multiplier)), target.hp)
+        target.hp -= damage
+        self.match.record_robot_damage(attacker.team, damage)
+        return damage
+
+    def _apply_semantic_effects(self) -> float:
+        """Apply only effects whose geometry and rule values are known here."""
+        sentry_healing = 0.0
+        for unit in (self.sentry, *self.allies, *self.enemies):
+            if not unit.alive:
+                continue
+            healing_regions = self.map.region_ids_at(unit.cell, kind="healing")
+            if any(self.map.region_owner(region) == unit.team for region in healing_regions):
+                before = unit.hp
+                # The supplied ``healing`` geometry is treated as the team's
+                # supply-zone healing area.  The later 25% out-of-combat mode
+                # needs the referee's disengagement definition, so it is not
+                # guessed in this tactical model.
+                unit.hp = min(unit.max_hp, unit.hp + unit.max_hp * 0.10 * self.decision_seconds)
+                if unit is self.sentry:
+                    sentry_healing += unit.hp - before
+        return sentry_healing
+
+    def _unit_defense_bonus(self, unit: Unit) -> float:
+        bonus = 0.0
+        if self.map.has_semantic_kind(unit.cell, "central_highland"):
+            bonus = max(bonus, 0.25)
+        for region in self.map.region_ids_at(unit.cell, kind="fortress"):
+            if self.map.region_owner(region) == unit.team and self.match.team(unit.team).outpost_destroyed_ever:
+                bonus = max(bonus, 0.50)
+        if unit.tunnel_defense_until_s > self.match.time_s:
+            bonus = max(bonus, 0.50)
+        return bonus
+
+    def _heat_cooling_rate(self, unit: Unit) -> float:
+        rate = 30.0
+        for region in self.map.region_ids_at(unit.cell, kind="fortress"):
+            team_state = self.match.team(unit.team)
+            if self.map.region_owner(region) == unit.team and team_state.outpost_destroyed_ever:
+                delta = team_state.base_max_hp - team_state.base_lowest_hp
+                rate = max(rate, 30.0 + min(75.0, float(int(delta // 40.0))))
+        if unit.tunnel_cooling_until_s > self.match.time_s:
+            rate = max(rate, 60.0)
+        return rate
+
+    def activate_tunnel_gain_after_valid_sequence(self, unit: Unit) -> None:
+        """Apply the official tunnel bonus after an external ordered-card check.
+
+        The current delivered JSON has tunnel polygons but no sequence/group
+        metadata, so entering one cell alone must not create a false bonus.
+        A future semantic export or referee event validates the required
+        end--middle--end traversal and then calls this method.
+        """
+        if not self.map.has_semantic_kind(unit.cell, "tunnel_gain"):
+            raise ValueError("tunnel bonus requires the unit to be in a tunnel gain region")
+        unit.tunnel_defense_until_s = self.match.time_s + 10.0
+        unit.tunnel_cooling_until_s = self.match.time_s + 120.0
+
+    def _update_rebuild_progress(self) -> None:
+        # Current participants have no explicit engineer role.  Use the
+        # official 10-second hero/infantry/sentry hold for the red sentry and
+        # a representative blue ground unit; an engineer adapter can later
+        # pass the official 5-second hold time through this same state machine.
+        occupants: dict[Team, Unit | None] = {
+            "red": self.sentry,
+            "blue": next((enemy for enemy in self.enemies if enemy.alive), None),
+        }
+        for side, unit in occupants.items():
+            if unit is None or not self.match.can_rebuild_outpost(side):
+                self.rebuild_hold_s[side] = 0.0
+                continue
+            outpost_cell = self._structure_cell(side, "outpost")
+            if unit.alive and self._distance(unit.cell, outpost_cell) <= 2.5:
+                self.rebuild_hold_s[side] += self.decision_seconds
+                if self.rebuild_hold_s[side] >= 10.0:
+                    self.match.rebuild_outpost(side)
+                    self.rebuild_hold_s[side] = 0.0
+            else:
+                self.rebuild_hold_s[side] = 0.0
+
+    def _team_total_hp(self, side: Team) -> float:
+        units = (self.sentry, *self.allies) if side == "red" else tuple(self.enemies)
+        return float(sum(max(0.0, unit.hp) for unit in units))
 
     def _move_towards(self, unit: Unit, goal: Cell) -> None:
         nav = self.navigator.plan(unit.cell, goal, np.zeros_like(self.map.static_cost))
