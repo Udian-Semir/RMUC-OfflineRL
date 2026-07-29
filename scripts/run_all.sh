@@ -15,7 +15,7 @@ cd "$(dirname "$0")/.."
 DB="${DB:-dataset/rmuc_2026_region_dataset.sqlite}"
 # Train on the HUMAN-DRIVEN infantry, not the sentry.  Offline RL cannot exceed
 # its demonstrator, and the logged sentry is each team's own autonomous script
-# (3.2x less map coverage, half the positional entropy of infantry).  Infantry
+# (2.9x less map coverage, half the positional entropy of infantry).  Infantry
 # are structurally identical to the sentry (400 HP / 260 heat / 17 mm cap) and
 # human-operated, so they are the right teacher for a sentry policy.
 # Override with AGENT=sentry to reproduce the old sentry-on-sentry run.
