@@ -1,0 +1,32 @@
+{
+  "source_image": "sentry_tactical_rl/assets/blackwhite_map.png",
+  "source_pixel_convention": "top_left, x right, y down",
+  "target_frame": "map",
+  "instruction": "Fill every world_xy_m with the measured radar/referee coordinate of the same physical landmark center. Use at least 4 well-spread non-collinear landmarks; do not use Foxglove display coordinates.",
+  "landmarks": [
+    {
+      "id": "red_base_center",
+      "semantic_region_id": "base_2",
+      "pixel_xy": [151.5, 403.5],
+      "world_xy_m": null
+    },
+    {
+      "id": "blue_base_center",
+      "semantic_region_id": "base_1",
+      "pixel_xy": [1299.0, 400.5],
+      "world_xy_m": null
+    },
+    {
+      "id": "red_outpost_center",
+      "semantic_region_id": "outpost_2",
+      "pixel_xy": [580.5, 592.0],
+      "world_xy_m": null
+    },
+    {
+      "id": "blue_outpost_center",
+      "semantic_region_id": "outpost_1",
+      "pixel_xy": [870.0, 206.5],
+      "world_xy_m": null
+    }
+  ]
+}

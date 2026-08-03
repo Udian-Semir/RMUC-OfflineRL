@@ -24,7 +24,7 @@ Design choices (see README for the full rationale):
 Action layouts
 --------------
 ``velocity`` / ``goal``  (legacy, 4-D): vx, vy, yaw_rate, fire-rate.
-``tactical``             (10-D): nav sub-goal + weapons-free gate + soft target
+``tactical``             (12-D): nav sub-goal + weapons-free gate + soft target
                          distribution.  See ``algos/action_spec.py`` for why the
                          turret rate and fire rate were wrong quantities to
                          predict at 1 Hz.
@@ -51,6 +51,10 @@ MATCH_SECONDS = 420.0  # RMUC seven-minute match phase
 
 TARGET_CONE_DEG = 15.0      # muzzle cone that counts as "aiming at"
 TARGET_TAU_DEG = 8.0        # softmax temperature over angular error (degrees)
+BUILDING_ATTACK_RANGE_M = 5.0
+BUILDING_STATIONARY_SPEED_MPS = 0.25
+BUILDING_STATIONARY_SECONDS = 2.0
+TACTICAL_TARGET_TYPES = tuple(S.MOBILE_TYPES + [S.TYPE_OUTPOST, S.TYPE_BASE])
 
 
 @dataclass
@@ -368,14 +372,24 @@ def build_obs(game: GameArrays, camp: str, agent_type: str,
 # ---------------------------------------------------------------------------
 def target_soft(game: GameArrays, camp: str, agent_type: str,
                 cone_deg: float = TARGET_CONE_DEG,
-                tau_deg: float = TARGET_TAU_DEG) -> np.ndarray:
-    """Soft target distribution [T, 7] recovered from the muzzle bearing.
+                tau_deg: float = TARGET_TAU_DEG,
+                building_range_m: float = BUILDING_ATTACK_RANGE_M,
+                stationary_speed_mps: float = BUILDING_STATIONARY_SPEED_MPS,
+                stationary_seconds: float = BUILDING_STATIONARY_SECONDS) -> np.ndarray:
+    """Soft target distribution [T, 9] recovered from the muzzle bearing.
 
     The log records *that* a robot fired but never *at whom*, so we infer it
     geometrically: the angular error between the turret heading and the bearing
-    to each live enemy.  Enemies inside `cone_deg` get softmax(-err / tau)
-    weight; if none are inside the cone the whole mass goes to the "no target"
-    class (index 6).
+    to each live enemy vehicle and the two static enemy buildings. Buildings
+    have `(0, 0)` in referee telemetry, so their aligned field landmarks are
+    used instead. A building is eligible when it lost HP on the same
+    referee sample transition as the ego's cumulative ammo increased.
+    Since the export omits target IDs, a weak label is also added when the
+    robot has stayed in building weapon range for more than two seconds and
+    no enemy vehicle is in that range. This is a training label, not a firing
+    bypass. Eligible targets inside
+    `cone_deg` get softmax(-err / tau) weight; if none are inside the cone the
+    whole mass goes to the final "no target" class.
 
     Validated against the log: on firing seconds the median error to the nearest
     live enemy is 6.7 deg vs 42.1 deg on non-firing seconds, and 77.5% of firing
@@ -391,20 +405,56 @@ def target_soft(game: GameArrays, camp: str, agent_type: str,
     yaw = _mirror_yaw(ego.yaw, mirror)
 
     err = np.full((T, N_TARGET_CLASSES - 1), np.inf, dtype=np.float64)
-    for j, et in enumerate(S.MOBILE_TYPES):
+    firing = fire_gate(game, camp, agent_type) > 0.5
+    speed = np.hypot(np.diff(ex, prepend=ex[:1]),
+                     np.diff(ey, prepend=ey[:1]))
+    stationary = speed <= float(stationary_speed_mps)
+    dwell_steps = max(1, int(np.ceil(float(stationary_seconds))))
+    stationary_run = np.zeros(T, dtype=bool)
+    if T > dwell_steps:
+        stationary_run[dwell_steps:] = np.logical_and.reduce(
+            [stationary[k:T - dwell_steps + k] for k in range(dwell_steps + 1)])
+
+    vehicle_in_range = np.zeros(T, dtype=bool)
+    for et in S.MOBILE_TYPES:
+        enemy = game.get(et, ecamp)
+        vx, vy = _mirror_xy(enemy.x, enemy.y, mirror)
+        known = (_pos_known(enemy.x, enemy.y) * enemy.alive) > 0
+        vehicle_in_range |= known & (np.hypot(vx - ex, vy - ey) <= building_range_m)
+    weak_building_any = np.zeros(T, dtype=bool)
+    for j, et in enumerate(TACTICAL_TARGET_TYPES):
         e = game.get(et, ecamp)
-        px, py = _mirror_xy(e.x, e.y, mirror)
-        ok = (_pos_known(e.x, e.y) * e.alive) > 0
+        if et in S.BUILDING_TYPES:
+            bx, by = S.structure_landmark(et, ecamp)
+            px, py = _mirror_xy(np.full(T, bx, dtype=np.float32), np.full(T, by, dtype=np.float32), mirror)
+            hp_drop = np.concatenate((
+                np.zeros(1, dtype=np.float32),
+                np.clip(e.hp[:-1] - e.hp[1:], 0.0, None),
+            ))
+            observed_damage = (e.alive > 0) & firing & (hp_drop > 0.0)
+            weak_intent = ((e.alive > 0) & stationary_run & ~vehicle_in_range
+                           & (np.hypot(px - ex, py - ey) <= building_range_m))
+            ok = observed_damage | weak_intent
+        else:
+            px, py = _mirror_xy(e.x, e.y, mirror)
+            ok = (_pos_known(e.x, e.y) * e.alive) > 0
         bearing = np.degrees(np.arctan2(py - ey, px - ex))
         d = np.abs(_wrap_deg(bearing - yaw))
-        err[:, j] = np.where(ok, d, np.inf)
+        # The weak rule represents a deliberate tactical decision: auto-aim
+        # may still rotate from any current barrel heading to the structure.
+        # Observed labels retain the stricter recorded-bearing geometry.
+        if et in S.BUILDING_TYPES:
+            err[:, j] = np.where(weak_intent, 0.0, np.where(ok, d, np.inf))
+            weak_building_any |= weak_intent
+        else:
+            err[:, j] = np.where(ok, d, np.inf)
 
     # the ego needs a real turret reading for any of this to mean anything
     ok_yaw = (yaw_valid(ego.yaw) > 0) & (ego.alive > 0) & (_pos_known(ego.x, ego.y) > 0)
 
     out = np.zeros((T, N_TARGET_CLASSES), np.float32)
     inside = err < cone_deg
-    any_in = inside.any(axis=1) & ok_yaw
+    any_in = inside.any(axis=1) & (ok_yaw | weak_building_any)
     if any_in.any():
         e_in = np.where(inside[any_in], err[any_in], np.inf)
         logits = -e_in / max(tau_deg, 1e-6)
@@ -466,8 +516,13 @@ def build_action_raw(game: GameArrays, camp: str, agent_type: str,
     live = (ego.alive[:-1] > 0) & (ego.alive[1:] > 0)
 
     if action_mode == "tactical":
-        gate = fire_gate(game, camp, agent_type)[:-1]
-        tgt = target_soft(game, camp, agent_type)[:-1]
+        # Ammo[t] - ammo[t-1] and the building HP delta at t describe the
+        # physical transition from referee sample t-1 to t. Dataset action i
+        # is state[i] -> state[i+1], so both labels must start at index 1.
+        # The previous prefix silently shifted fire/target one second earlier
+        # than the navigation target.
+        gate = fire_gate(game, camp, agent_type)[1:]
+        tgt = target_soft(game, camp, agent_type)[1:]
         act = np.concatenate(
             [np.stack([vx, vy], axis=1), gate[:, None], tgt], axis=1
         ).astype(np.float32)

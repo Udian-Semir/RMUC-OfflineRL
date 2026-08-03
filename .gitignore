@@ -39,6 +39,25 @@
 /viz/figures/*.gif
 /viz/figures/*.webm
 
+# ---- local video exports ----------------------------------------------------
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.flv
+*.wmv
+*.m4v
+*.mpg
+*.mpeg
+
+# ---- training logs ----------------------------------------------------------
+/sparring_style_pool/checkpoints/**/tb/
+/sparring_style_pool/checkpoints/**/check_log.txt
+/sparring_style_pool/checkpoints/**/train_stdout.txt
+/sparring_style_pool/checkpoints/**/train_log.csv
+/sparring_style_pool/checkpoints/**/eval_log.csv
+
 # ---- archives ---------------------------------------------------------------
 *.7z
 *.zip
@@ -63,3 +82,5 @@ Thumbs.db
 .idea/
 .vscode/
 *.log
+/log/
+/install/

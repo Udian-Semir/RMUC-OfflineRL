@@ -6,9 +6,9 @@
 
 ## 当前完成度
 
-已实现：语义地图/硬禁区、动态威胁与路径代价、候选 goal 生成、雷达可见性遮罩、`(goal, target, fire_mode)` 动作、反应式敌我陪练、PPO、动作 mask、checkpoint，以及到既有 Gazebo 战术/导航协议的 JSON 边界。`match_rules.py` 已实现基地 `5000 HP + 150 虚拟护盾`、前哨 `1500 HP`、前哨存活时基地无敌、累计基地失血重建机会、300 秒重建截止、60/180/300 秒阶段状态，以及官方终局比较顺序。当前环境已经以真实建筑伤害替代“在前哨区域内站人就扣血”的旧逻辑。`sparring_adapter.py` 会从环境快照构造与 offlineRL 训练完全同序的 161 维向量，并已用冻结的蓝方哨兵 IQL checkpoint 推理验证。
+已实现：语义地图/硬禁区、动态威胁与路径代价、候选 goal 生成、雷达可见性遮罩、`(goal, target, fire_mode)` 动作、反应式敌我陪练、PPO、动作 mask、checkpoint，以及到既有 Gazebo 战术/导航协议的 JSON 边界。`match_rules.py` 已实现基地 `5000 HP + 150` 虚拟护盾、前哨 `1500 HP`、前哨存活时基地无敌、累计基地失血重建机会、300 秒重建截止、60/180/300 秒阶段状态，以及官方终局比较顺序。当前环境已经以真实建筑伤害替代“在前哨区域内站人就扣血”的旧逻辑。`sparring_adapter.py` 会从环境快照构造与 offlineRL 训练完全同序的 161 维向量；环境已补齐双方六角色固定槽位，红方哨兵之外的 11 个单位可用冻结 IQL checkpoint 每 5 秒生成子目标，并由 A*/射线/弹药/热量检查执行。
 
-暂未实现：正式场地地图的坐标/通行校准、真实命中盒/弹道、经济与兑换、复活、能量机关、完整姿态系统、堡垒储备弹药和有序隧道触发、雷达输入桥接、ROS2 发布节点、全 6 兵种 roster 和 offlineRL 子目标执行器、以及实车标定。现有离线模型现在可以对显式环境快照推理，但还不能直接替换脚本陪练：当前环境只实例化部分角色，且其 5 秒子目标仍必须经过导航/射击安全层。
+暂未实现：正式场地地图的坐标/通行校准、真实命中盒/弹道、经济与兑换、完整等级/经验与弱化状态、能量机关、完整姿态系统、堡垒储备弹药和有序隧道触发、雷达输入桥接、ROS2 发布节点、批量/向量化陪练推理、多个风格 checkpoint 的策略池，以及实车标定。地面单位目前会在阵亡读条后于己方补给区以 10% HP 和 10 秒无敌回归；空中单位只能攻击、不能被攻击。普通步兵/空中车辆的目标锁定伤害在 3 m/5 m 圈内按 `140/70 HP/s` 结算；建筑为 `200 HP/s`，但还必须同时有离线 `fire_gate` 和靠近建筑的移动意图，避免把路过前哨错当推塔。英雄为 `200 HP/4 s`，哨兵保留原有单发模型。它们仍是待实测标定的 2D 战术近似，不得将 offline 陪练模式的 PPO 曲线视为正式比赛实力。
 
 ### 雷达侧传统代价计算
 
@@ -35,6 +35,22 @@ python3.10 -m sentry_tactical_rl.costmap_smoke \
 
 默认以 0.10 m 生成雷达侧代价图，避免粗下采样封死真实窄通道；`sentry_radius_m`、坡段通行规则和地图原点必须用实车尺寸与联调结果校准。
 
+## 地图校准
+
+当前 A* 已对交付的 1 m 战术栅格验证基地、前哨和全部语义锚点的连通性；这只说明 PNG 投影后的离散地图没有自相矛盾，**不**证明实车可通过。先填写
+`sentry_tactical_rl/assets/radar_landmark_template.json` 中四个 `world_xy_m`：它们必须是同一物理中心在雷达/裁判 `map` 坐标系的实测位置，不要填 Foxglove 预览读数。
+
+```bash
+~/miniconda3/envs/nerfstudio/bin/python \
+  -m sentry_tactical_rl.tools.calibrate_semantic_map \
+  --landmarks sentry_tactical_rl/assets/radar_landmark_template.json \
+  --model affine
+```
+
+该命令生成 `semantic_map_calibration.json`，其中记录像素到 `map` 的矩阵和逐地标残差。至少使用 4 个分散且不共线的点；初步要求最大残差不超过 `0.2 m`。若残差呈现位置相关的系统偏差，改用 `--model homography` 并补充地标，不要用手工偏移硬凑。
+
+正式 PPO 之前还必须实测并写入规则/代价模型：狗洞/坡段/起伏路的实际通行性、基地至前哨及跨场路线的实车耗时、射线遮挡与可交战距离、命中/伤害/热量/弹药参数，以及雷达位置/速度/血量的延迟和误差分布。当前项目按已绘制的黑白可通行区作为哨兵硬约束，不另做哨兵外廓膨胀。
+
 ## 本机训练状态
 
 本机 RTX 5070 Laptop GPU（8 GB）已用 CUDA PyTorch 跑通 5 次 PPO 更新，约 6.5 秒；当前不需要 AutoDL。请使用 `~/miniconda3/envs/nerfstudio/bin/python`（CUDA）运行训练；系统默认 Python 3.13 没有安装 torch。
@@ -53,6 +69,26 @@ python3.10 -m sentry_tactical_rl.train \
   --map-json sentry_tactical_rl/assets/semantic_map_aligned.json \
   --obstacle-map sentry_tactical_rl/assets/blackwhite_map.png \
   --out-dir runs/sentry_tactical_rmuc2026 --live
+# 使用完整 roster 与冻结 IQL 陪练（当前是未校准的战术仿真，不是正式结论）
+python3.10 -m sentry_tactical_rl.train \
+  --config sentry_tactical_rl/configs/offline_sparring.yaml
+
+## Database Sentry Hybrid Replay
+
+Replay one official database sentry track as the red ego while all other 11
+slots run the frozen offlineRL sparring policies.  The result is explicitly a
+hybrid diagnostic: the sentry state comes from the official SQLite record;
+companions and building interactions come from the tactical simulator.
+
+```bash
+python3.10 -m sentry_tactical_rl.tools.replay_database_sentry_sparring \
+  --game-id 1778631047459 --camp red \
+  --profile aggressive --live
+```
+
+It writes `replay.gif`, `final.png`, `replay.csv`, and `summary.json` under
+`runs/database_sentry_sparring_<game_id>_<camp>/`. Press `Esc` to stop a live
+OpenCV window early; omit `--live` to generate only the files.
 ```
 
 训练依赖 `numpy`、`torch` 和可选的 `matplotlib` 实时窗口。本工作区默认 `python` 是没有 torch 的 Python 3.13；请使用装有 torch 的 Python 3.10 或团队的 conda 环境。即使不加 `--live`，默认 checkpoint 和 `metrics.csv` 仍会写入 `runs/sentry_tactical_demo/`；加上 `--live` 后还会持续刷新 `training_live.png`。

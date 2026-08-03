@@ -14,6 +14,18 @@ def _best_eval(path: Path) -> dict[str, str]:
         rows = list(csv.DictReader(handle))
     if not rows:
         return {}
+    # CsvLogger historically appended when a run directory was re-used.  A
+    # reset from a larger step back to 1000 therefore marks a new training
+    # session; reports must describe the checkpoint from the latest session,
+    # not an older, incompatible dataset build.
+    starts = [0]
+    for idx in range(1, len(rows)):
+        try:
+            if int(rows[idx].get("step", "0")) <= int(rows[idx - 1].get("step", "0")):
+                starts.append(idx)
+        except ValueError:
+            pass
+    rows = rows[starts[-1]:]
     key = "action_mse"
     usable = [row for row in rows if row.get(key) not in (None, "")]
     if not usable:
@@ -47,7 +59,7 @@ def write_report(data_dir: Path, run_dir: Path, role: str) -> Path:
         "",
         "- Red and blue trajectories are both included; blue trajectories are rotated into the red-centric ego frame before training.",
         "- The validation split is by match, not randomly sampled seconds from the same match.",
-        "- Tactical navigation is the normalized 5-second ego displacement. The fire gate comes from the selected weapon's ammunition counter. Target labels are inferred from turret bearing and live enemy geometry because the referee log does not record target IDs.",
+        "- Tactical navigation is the normalized 5-second ego displacement. The fire gate comes from the selected weapon's ammunition counter. Target labels use turret/HP evidence where available; because the referee log omits target IDs, a weak building-intent label is also added after >2 s stationary in 5 m structure range with no enemy vehicle in range.",
         "",
         "## Selected Checkpoint",
         "",
@@ -68,7 +80,7 @@ def write_report(data_dir: Path, run_dir: Path, role: str) -> Path:
         "",
         "- `transition`：一个 1 Hz 的 `(state_t, action_t, reward_t, state_t+1)` 样本，不是一整局比赛。",
         "- `step`：训练的梯度更新次数；报告中的这一行是 held-out `action_mse` 最低的时刻，`best.pt` 就保存自该时刻。",
-        "- `action_mse`：10 维归一化动作整体的均方误差，越低越接近留出比赛里的下一步动作。它只适合比较同一角色、同一动作定义和同一数据构建版本，不能横向比较不同兵种强弱。",
+        "- `action_mse`：12 维归一化战术动作整体的均方误差（旧 10 维 checkpoint 仍兼容），越低越接近留出比赛里的下一步动作。它只适合比较同一角色、同一动作定义和同一数据构建版本，不能横向比较不同兵种强弱。",
         "- `nav_mse`：仅 5 秒子目标位移的归一化均方误差，越低越好；它不是以米为单位的路径误差。",
         "- `fire_acc`：开火/不开火的总准确率。不开火样本很多时会虚高，不能单独使用。",
         "- `fire_f1`：只针对“应该开火”正类的 precision/recall 平衡，越高越好；评估射击陪练优先看它和 `fire_pos_rate`。",

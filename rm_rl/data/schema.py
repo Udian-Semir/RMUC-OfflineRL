@@ -112,6 +112,24 @@ MOBILE_TYPES = [
 BUILDING_TYPES = [TYPE_BASE, TYPE_OUTPOST]
 ALL_TYPES = MOBILE_TYPES + BUILDING_TYPES
 
+# The referee time series carries building HP but encodes its x/y as (0, 0).
+# These centres come from the aligned RMUC 2026 field landmarks and are used
+# only to turn a firing robot's muzzle direction into an outpost/base target
+# label.  They must be revised if field calibration changes.
+RMUC2026_LANDMARKS = {
+    "red_base": (2.73, 7.45),
+    "blue_base": (25.32, 7.45),
+    "red_outpost": (10.63, 3.86),
+    "blue_outpost": (16.95, 11.12),
+}
+
+
+def structure_landmark(rtype: str, camp: str) -> tuple[float, float]:
+    if rtype not in BUILDING_TYPES:
+        raise ValueError(f"not a building type: {rtype}")
+    key = ("red" if camp == CAMP_RED else "blue") + ("_base" if rtype == TYPE_BASE else "_outpost")
+    return RMUC2026_LANDMARKS[key]
+
 # max HP by type (upper tier reached via in-game level upgrades); used only for
 # normalisation fall-backs when a row's 最大血量 is missing.
 MAX_HP = {

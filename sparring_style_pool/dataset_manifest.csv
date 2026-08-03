@@ -1,0 +1,16 @@
+role,style,train_episodes,train_transitions,val_episodes,val_transitions
+hero,aggressive,363,151731,38,15884
+engineer,aggressive,365,152567,38,15884
+infantry,aggressive,724,302626,75,31350
+aerial,aggressive,359,150059,37,15466
+sentry,aggressive,361,150895,39,16302
+hero,pressure,369,153737,37,15323
+engineer,pressure,369,153737,36,14905
+infantry,pressure,734,305802,74,30646
+aerial,pressure,357,148721,36,14905
+sentry,pressure,364,151647,36,14905
+hero,measured,359,149696,46,19205
+engineer,measured,357,148860,45,18787
+infantry,measured,707,294844,90,37574
+aerial,measured,315,131308,40,16697
+sentry,measured,334,139246,42,17533

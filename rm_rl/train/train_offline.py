@@ -36,7 +36,8 @@ def build_model(algo, cfg, obs_dim, act_dim, reward_scale=1.0, spec=None):
                    beta=p.get("beta", 3.0), adv_max=p.get("adv_max", 100.0),
                    polyak=p.get("polyak", 0.005),
                    use_quality_weight=p.get("use_quality_weight", False),
-                   reward_scale=reward_scale, spec=spec)
+                   reward_scale=reward_scale, spec=spec,
+                   building_target_weight=p.get("building_target_weight", 1.0))
     if algo == "bc":
         p = cfg.get("bc", {})
         return BC(obs_dim, act_dim, hidden, depth,
@@ -93,6 +94,18 @@ def evaluate(core, loader, device):
                 target_top1=float(((p_t == y_t).float() * valid).sum() / den),
                 target_top1_named=float(named_hit),
                 target_named_rate=float((named * valid).sum() / den))
+            # New tactical datasets reserve the two slots before no-target for
+            # outpost/base. Keep the metric conditional so legacy 10-D runs
+            # retain their original behaviour.
+            if spec.n_target >= 9:
+                building = (y_t >= spec.n_target - 3) & (y_t < spec.n_target - 1)
+                predicted_building = (p_t >= spec.n_target - 3) & (p_t < spec.n_target - 1)
+                building_den = (building.float() * valid).sum().clamp(min=1)
+                row.update(
+                    building_target_rate=float((building.float() * valid).sum() / den),
+                    building_target_recall=float(((predicted_building & building).float() * valid).sum() / building_den),
+                    building_target_exact=float((((p_t == y_t).float() * building.float()) * valid).sum() / building_den),
+                )
         # surface value magnitudes so divergence (exploding Q/V) is visible
         for k in ("q_mean", "v_mean", "adv_mean"):
             if k in metrics:
@@ -181,6 +194,14 @@ def main():
             src = os.path.join(data_dir, f)
             if os.path.exists(src):
                 shutil.copy(src, os.path.join(out_dir, f))
+        # A fresh offline run must not append metrics from an older dataset
+        # build to the same directory. Set train.fresh_logs=false only for an
+        # explicit resume workflow.
+        if tr.get("fresh_logs", True):
+            for name in ("train_log.csv", "eval_log.csv"):
+                path = os.path.join(out_dir, name)
+                if os.path.exists(path):
+                    os.remove(path)
         # TF-free CSV logs (always work, even under non-ASCII paths)
         train_csv = C.CsvLogger(os.path.join(out_dir, "train_log.csv"))
         eval_csv = C.CsvLogger(os.path.join(out_dir, "eval_log.csv"))
@@ -225,7 +246,7 @@ def main():
                 for k, v in metrics.items():
                     writer.add_scalar(f"train/{k}", float(v), step)
                 writer.add_scalar("train/lr", lr, step)
-            print(f"step {step}/{max_steps} loss {float(metrics['loss']):.4f}")
+            print(f"step {step}/{max_steps} loss {float(metrics['loss']):.4f}", flush=True)
 
         if step % eval_every == 0 and val_loader is not None and main_proc:
             ev = evaluate(core, val_loader, device)
@@ -235,7 +256,7 @@ def main():
                 for k, v in ev.items():
                     writer.add_scalar(f"val/{k}", v, step)
             print("[eval] step %d " % step
-                  + " ".join(f"{k} {v:.4f}" for k, v in ev.items()))
+                  + " ".join(f"{k} {v:.4f}" for k, v in ev.items()), flush=True)
 
             score = ev.get(select_metric)
             if score is not None:
@@ -247,13 +268,13 @@ def main():
                                    action_mode=meta.get("action_mode", "velocity"),
                                    act_scale=meta["act_scale"],
                                    select_metric=select_metric, select_score=score))
-                    print(f"        -> new best {select_metric}={score:.4f}, saved best.pt")
+                    print(f"        -> new best {select_metric}={score:.4f}, saved best.pt", flush=True)
                 else:
                     since_best += 1
                     if patience and since_best >= patience:
                         print(f"[early-stop] {select_metric} has not improved for "
                               f"{since_best} evals (best {best_score:.4f} @ step "
-                              f"{best_step}); stopping.")
+                              f"{best_step}); stopping.", flush=True)
                         break
 
         if step % ckpt_every == 0 and main_proc:
@@ -274,9 +295,9 @@ def main():
             writer.close()
         if best_step > 0:
             print(f"done. best {select_metric}={best_score:.4f} at step {best_step} "
-                  f"-> best.pt   (evaluate THAT, not final.pt)")
+                  f"-> best.pt   (evaluate THAT, not final.pt)", flush=True)
         else:
-            print("done.")
+            print("done.", flush=True)
     C.cleanup_ddp()
 
 

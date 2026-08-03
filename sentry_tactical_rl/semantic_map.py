@@ -31,13 +31,14 @@ class PathPlan:
 
 @dataclass
 class SemanticMap:
-    """Static tactical layers and named, policy-selectable goal anchors."""
+    """Static layers and anchors on a metric planning grid."""
 
     width: int
     height: int
     hard_blocked: np.ndarray  # [H, W], true means this sentry may never enter
     static_cost: np.ndarray  # [H, W], non-negative traversal preference
     anchors: dict[str, Cell] = field(default_factory=dict)
+    resolution_m: float = 1.0
     red_outpost: Cell = (5, 7)
     blue_outpost: Cell = (22, 7)
     red_base: Cell = (1, 7)
@@ -56,6 +57,8 @@ class SemanticMap:
             raise ValueError(f"map layers must have shape {shape}")
         if np.any(self.static_cost < 0):
             raise ValueError("static_cost must be non-negative")
+        if self.resolution_m <= 0.0:
+            raise ValueError("resolution_m must be positive")
         for name, layer in self.semantic_layers.items():
             if layer.shape != shape:
                 raise ValueError(f"semantic layer {name!r} must have shape {shape}")
@@ -148,6 +151,7 @@ class SemanticMap:
         *,
         obstacle_path: str | Path | None = None,
         occupancy_threshold: float = 0.5,
+        resolution_m: float = 0.1,
     ) -> "SemanticMap":
         """Load the supplied RMUC semantic JSON onto the tactical grid.
 
@@ -164,9 +168,9 @@ class SemanticMap:
         frame = payload.get("frame", {})
         field_x = float(frame.get("x_m", 28.0))
         field_y = float(frame.get("y_m", 15.0))
-        width, height = int(round(field_x)), int(round(field_y))
-        if not np.isclose(field_x, width) or not np.isclose(field_y, height):
-            raise ValueError("aligned JSON frame must currently map to integer tactical metres")
+        width, height = int(round(field_x / resolution_m)), int(round(field_y / resolution_m))
+        if not np.isclose(field_x / resolution_m, width) or not np.isclose(field_y / resolution_m, height):
+            raise ValueError("aligned JSON frame must be divisible by resolution_m")
         if not 0.0 <= occupancy_threshold <= 1.0:
             raise ValueError("occupancy_threshold must be in [0, 1]")
 
@@ -205,8 +209,10 @@ class SemanticMap:
             points = np.asarray(region.get("polygon_xy_m", []), dtype=np.float32)
             if len(points) < 3:
                 continue
-            px = np.rint(points[:, 0] / field_x * (width - 1)).astype(np.int32)
-            py = np.rint(points[:, 1] / field_y * (height - 1)).astype(np.int32)
+            px = np.rint(points[:, 0] / resolution_m - 0.5).astype(np.int32)
+            py = np.rint(points[:, 1] / resolution_m - 0.5).astype(np.int32)
+            px = np.clip(px, 0, width - 1)
+            py = np.clip(py, 0, height - 1)
             mask = semantic_layers.setdefault(kind, np.zeros((height, width), dtype=bool))
             polygon = np.stack((px, py), axis=1)
             cv2.fillPoly(mask.view(np.uint8), [polygon], 1)
@@ -217,8 +223,8 @@ class SemanticMap:
             region_kinds[region_id] = kind
             center = (float(points[:, 0].mean()), float(points[:, 1].mean()))
             center_cell = (
-                int(np.clip(np.floor(center[0]), 0, width - 1)),
-                int(np.clip(np.floor(center[1]), 0, height - 1)),
+                int(np.clip(np.floor(center[0] / resolution_m), 0, width - 1)),
+                int(np.clip(np.floor(center[1] / resolution_m), 0, height - 1)),
             )
             region_centers[region_id] = center_cell
             if kind in objective_centers:
@@ -243,8 +249,8 @@ class SemanticMap:
                 return fallback
             point = centers[0] if side == "red" else centers[-1]
             requested = (
-                int(np.clip(np.floor(point[0]), 0, width - 1)),
-                int(np.clip(np.floor(point[1]), 0, height - 1)),
+                int(np.clip(np.floor(point[0] / resolution_m), 0, width - 1)),
+                int(np.clip(np.floor(point[1] / resolution_m), 0, height - 1)),
             )
             return _nearest_free(hard, requested) or fallback
 
@@ -253,6 +259,7 @@ class SemanticMap:
             height=height,
             hard_blocked=hard,
             static_cost=np.zeros((height, width), dtype=np.float32),
+            resolution_m=resolution_m,
             anchors=anchors,
             red_outpost=objective("outpost", "red", (5, 7)),
             blue_outpost=objective("outpost", "blue", (22, 7)),
@@ -304,12 +311,27 @@ class SemanticMap:
             return None
         return "red" if red_distance < blue_distance else "blue"
 
-    def nearest_free(self, cell: Cell, max_radius: int = 12) -> Cell | None:
-        return _nearest_free(self.hard_blocked, cell, max_radius)
+    def nearest_free(self, cell: Cell, max_radius: int | None = None) -> Cell | None:
+        # A fixed 12-cell search was 12 m on the original demo grid but only
+        # 1.2 m on the 0.1 m execution grid. Default to the full field so a
+        # spawn or radar sample can never be left inside an obstacle.
+        radius = max(self.width, self.height) if max_radius is None else max_radius
+        return _nearest_free(self.hard_blocked, cell, radius)
 
     def clamp_cell(self, cell: Cell) -> Cell:
         return (int(np.clip(cell[0], 0, self.width - 1)),
                 int(np.clip(cell[1], 0, self.height - 1)))
+
+    def meters_to_cell(self, position_m: tuple[float, float]) -> Cell:
+        """Nearest grid-cell centre for a physical RMUC field position."""
+        return self.clamp_cell((
+            int(np.floor(float(position_m[0]) / self.resolution_m)),
+            int(np.floor(float(position_m[1]) / self.resolution_m)),
+        ))
+
+    def cell_to_meters(self, cell: Cell) -> tuple[float, float]:
+        return ((cell[0] + 0.5) * self.resolution_m,
+                (cell[1] + 0.5) * self.resolution_m)
 
     def neighbours(self, cell: Cell) -> Iterable[Cell]:
         x, y = cell
@@ -392,8 +414,9 @@ class SemanticMap:
 
     def _objective_marks(self, center: Cell, value: float) -> Iterable[tuple[int, int, float]]:
         cx, cy = center
-        for x in range(max(0, cx - 1), min(self.width, cx + 2)):
-            for y in range(max(0, cy - 1), min(self.height, cy + 2)):
+        radius = max(1, int(round(1.0 / self.resolution_m)))
+        for x in range(max(0, cx - radius), min(self.width, cx + radius + 1)):
+            for y in range(max(0, cy - radius), min(self.height, cy + radius + 1)):
                 yield x, y, value
 
 

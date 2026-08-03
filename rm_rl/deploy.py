@@ -74,7 +74,7 @@ def load_policy(run_dir_or_ckpt: str, device="cpu"):
 
 
 def decode_action(a_norm: np.ndarray, act_scale: np.ndarray, camp: str = "红",
-                  action_mode: str = "velocity"):
+                  action_mode: str = "velocity", act_dim: int | None = None):
     """Map a policy action in [-1,1] back to a physical field-frame command.
 
     For ``tactical`` the command is what a real autonomy stack consumes:
@@ -83,15 +83,16 @@ def decode_action(a_norm: np.ndarray, act_scale: np.ndarray, camp: str = "红",
     """
     a = np.asarray(a_norm, np.float32) * act_scale
     if action_mode == "tactical":
-        spec = get_spec("tactical")
+        spec = get_spec("tactical", act_dim or int(a.shape[-1]))
         gx, gy = float(a[..., 0]), float(a[..., 1])
         if camp == "蓝":                 # invert the canonicalisation mirror
             gx, gy = -gx, -gy
         probs = np.asarray(a[..., spec.sl_target], np.float32)
         tgt = int(np.argmax(probs))
+        no_target = spec.n_target - 1
         return dict(goal_dx=gx, goal_dy=gy,
                     fire=float(a[..., 2] > 0.5),
-                    target=None if tgt == NO_TARGET else tgt,
+                    target=None if tgt == no_target else tgt,
                     target_conf=float(probs[tgt]),
                     target_probs=probs.tolist())
     vx, vy, yaw_rate, fire = a[..., 0], a[..., 1], a[..., 2], a[..., 3]
@@ -160,7 +161,8 @@ class MLPPolicyRunner:
         o = self.norm.normalize(o).unsqueeze(0)
         a = self.model.act(o, deterministic=True)[0].cpu().numpy()
         return decode_action(a, self.info["act_scale"], self.camp,
-                             self.info.get("action_mode", "velocity"))
+                             self.info.get("action_mode", "velocity"),
+                             self.info.get("act_dim"))
 
 
 # For Decision Transformer deployment you maintain a rolling buffer of the last

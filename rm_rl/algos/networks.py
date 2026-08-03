@@ -71,7 +71,7 @@ class HybridPolicy(nn.Module):
     """
 
     def __init__(self, obs_dim, spec: ActionSpec, hidden=512, depth=3,
-                 log_std_min=-3.0, log_std_max=2.0):
+                 log_std_min=-3.0, log_std_max=2.0, building_target_weight=1.0):
         super().__init__()
         self.spec = spec
         self.act_dim = spec.dim
@@ -82,6 +82,7 @@ class HybridPolicy(nn.Module):
         self.head_fire = nn.Linear(hidden, 1)
         self.head_target = nn.Linear(hidden, spec.n_target)
         self.log_std_min, self.log_std_max = log_std_min, log_std_max
+        self.building_target_weight = max(1.0, float(building_target_weight))
 
     def heads(self, obs):
         h = self.trunk(obs)
@@ -98,7 +99,16 @@ class HybridPolicy(nn.Module):
         lp = lp - F.binary_cross_entropy_with_logits(
             fire_logit, gate.clamp(0.0, 1.0), reduction="none")
         p_t = act[..., s.sl_target]
-        lp = lp + (p_t * F.log_softmax(tgt_logits, dim=-1)).sum(-1)
+        target_lp = (p_t * F.log_softmax(tgt_logits, dim=-1)).sum(-1)
+        if s.n_target >= 9 and self.building_target_weight > 1.0:
+            # The two classes immediately before no-target are outpost/base.
+            # Their labels are sparse because the referee log lacks a shooter
+            # ID, so only high-confidence building-damage transitions enter
+            # the data. Upweight only this categorical term, not navigation,
+            # fire, Q, or V losses.
+            building_mass = p_t[..., s.n_target - 3:s.n_target - 1].sum(-1)
+            target_lp = target_lp * (1.0 + (self.building_target_weight - 1.0) * building_mass)
+        lp = lp + target_lp
         return lp
 
     @torch.no_grad()
@@ -117,10 +127,10 @@ class HybridPolicy(nn.Module):
         return torch.cat([nav, gate, p_tgt], dim=-1)
 
 
-def build_policy(obs_dim, spec: ActionSpec, hidden=256, depth=2):
+def build_policy(obs_dim, spec: ActionSpec, hidden=256, depth=2, building_target_weight=1.0):
     """Pick the density that matches the action space."""
     if spec.is_tactical:
-        return HybridPolicy(obs_dim, spec, hidden, depth)
+        return HybridPolicy(obs_dim, spec, hidden, depth, building_target_weight=building_target_weight)
     return GaussianPolicy(obs_dim, spec.dim, hidden, depth)
 
 

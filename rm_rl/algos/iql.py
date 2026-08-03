@@ -24,11 +24,14 @@ class IQL(nn.Module):
     def __init__(self, obs_dim, act_dim, hidden=256, depth=2,
                  gamma=0.99, expectile=0.7, beta=3.0, adv_max=100.0,
                  polyak=0.005, use_quality_weight=False, reward_scale=1.0,
-                 spec: ActionSpec | None = None):
+                 spec: ActionSpec | None = None, building_target_weight=1.0):
         super().__init__()
         self.spec = spec or get_spec("velocity", act_dim)
         act_dim = self.spec.dim
-        self.policy = build_policy(obs_dim, self.spec, hidden, depth)
+        self.policy = build_policy(
+            obs_dim, self.spec, hidden, depth,
+            building_target_weight=building_target_weight,
+        )
         self.qf = TwinQ(obs_dim, act_dim, hidden, depth)
         self.vf = ValueNet(obs_dim, hidden, depth)
         self.qf_target = copy.deepcopy(self.qf)

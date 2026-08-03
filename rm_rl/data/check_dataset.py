@@ -17,8 +17,8 @@ import sys
 import numpy as np
 
 from . import schema as S
-from .features import obs_dim, obs_feature_names, is_capability_feature
-from ..algos.action_spec import NO_TARGET, get_spec
+from .features import TACTICAL_TARGET_TYPES, obs_dim, obs_feature_names, is_capability_feature
+from ..algos.action_spec import get_spec
 
 
 def check(data_dir: str) -> int:
@@ -67,7 +67,7 @@ def check(data_dir: str) -> int:
         # 工程 has no shooting weapon in the match telemetry, so its selected
         # weapon-state observations are correctly zero.  Aerial is never
         # exposed to the radar's 易伤 state, including when it is the ego unit.
-        if agent_type == S.TYPE_ENGINEER and nm in {"ego.heat_frac", "ego.ammo"}:
+        if agent_type == S.TYPE_ENGINEER and nm in {"ego.heat_frac", "ego.heat_headroom", "ego.ammo"}:
             return True
         if agent_type == S.TYPE_AERIAL and nm == "ego.vuln":
             return True
@@ -101,13 +101,18 @@ def check(data_dir: str) -> int:
               f"p99={np.percentile(np.abs(nav), 99, axis=0).round(3).tolist()}")
         print(f"fire gate: on {gate.mean():.1%} of live seconds")
         share = tgt.mean(0)
-        names = list(S.MOBILE_TYPES) + ["<no target>"]
+        names = list(TACTICAL_TARGET_TYPES) + ["<no target>"]
+        # A legacy 10-D dataset has only the six mobile classes.  Use the
+        # action dimension rather than a global constant so old artifacts stay
+        # inspectable after adding outpost/base target labels.
+        if len(names) != spec.n_target:
+            names = list(S.MOBILE_TYPES) + ["<no target>"]
         print("target distribution (mean probability mass):")
         for nm, p in zip(names, share):
             print(f"    {nm:<10} {p:.3f}")
         hard = tgt.argmax(1)
-        named = (hard != NO_TARGET).mean()
-        print(f"a concrete enemy is the argmax on {named:.1%} of live seconds")
+        named = (hard != spec.n_target - 1).mean()
+        print(f"a concrete target is the argmax on {named:.1%} of live seconds")
 
         movement_only = agent_type == S.TYPE_ENGINEER
         if gate.mean() < 0.005 and not movement_only:

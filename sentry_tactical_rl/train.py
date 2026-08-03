@@ -30,6 +30,8 @@ def main() -> None:
                         help="black/white occupancy image paired with --map-json")
     parser.add_argument("--updates", type=int, default=None, help="override config train.updates")
     parser.add_argument("--out-dir", default=None, help="override train.out_dir for checkpoints and telemetry")
+    parser.add_argument("--resume", default=None,
+                        help="resume model and optimizer from a PPO checkpoint; --updates is additional updates")
     parser.add_argument("--live", action="store_true",
                         help="open a live reward/cost dashboard; metrics are always saved to CSV")
     args = parser.parse_args()
@@ -50,25 +52,41 @@ def main() -> None:
     valid_ppo_fields = {field.name for field in fields(PPOConfig)}
     ppo = PPOConfig(**{key: value for key, value in train_cfg.items() if key in valid_ppo_fields})
     trainer = PPOTrainer(env, ppo, device=_device(str(train_cfg.get("device", "auto"))))
+    start_update = 0
+    if args.resume:
+        metadata = trainer.load(args.resume)
+        start_update = int(metadata.get("update", 0))
+        print(f"resumed checkpoint={args.resume}; previous_update={start_update}")
     updates = args.updates or int(train_cfg["updates"])
     out_dir = Path(args.out_dir or train_cfg["out_dir"])
     checkpoint_every = int(train_cfg.get("checkpoint_every", 25))
     print(f"training on {trainer.device}; goals={env.n_goals}, targets={env.n_targets}, vector={env.vector_dim}")
     dashboard = TrainingDashboard(out_dir, live=args.live)
     try:
-        for update in range(1, updates + 1):
+        for offset in range(1, updates + 1):
+            update = start_update + offset
             metrics = trainer.train_update()
             dashboard.update(update, metrics)
             if update == 1 or update % 5 == 0:
                 print(
                     "update={:04d} return={:7.3f} reward={:7.3f} path_cost={:7.3f} "
-                    "dmg={:6.2f}/{:6.2f} invalid={:.3f} pi={:7.4f} v={:7.4f} ent={:6.3f} episodes={:.0f}".format(
+                    "sentry[robot/Bop/Bbase]={:.2f}/{:.2f}/{:.2f} taken={:.2f} "
+                    "all[red->blue OP/Base]={:.2f}/{:.2f} world[red->blue OP/Base | blue->red OP/Base]={:.2f}/{:.2f}/{:.2f}/{:.2f} "
+                    "invalid={:.3f} pi={:7.4f} v={:7.4f} ent={:6.3f} episodes={:.0f}".format(
                         update,
                         metrics["mean_episode_return"],
                         metrics.get("mean_reward", float("nan")),
                         metrics.get("mean_path_cost", float("nan")),
                         metrics.get("mean_damage_dealt", 0.0),
+                        metrics.get("mean_sentry_blue_outpost_damage", 0.0),
+                        metrics.get("mean_sentry_blue_base_damage", 0.0),
                         metrics.get("mean_damage_taken", 0.0),
+                        metrics.get("mean_ally_blue_outpost_damage", 0.0),
+                        metrics.get("mean_ally_blue_base_damage", 0.0),
+                        metrics.get("mean_blue_outpost_damage", 0.0),
+                        metrics.get("mean_red_outpost_damage", 0.0),
+                        metrics.get("mean_blue_base_damage", 0.0),
+                        metrics.get("mean_red_base_damage", 0.0),
                         metrics.get("mean_invalid_action", 0.0),
                         metrics["policy_loss"],
                         metrics["value_loss"],

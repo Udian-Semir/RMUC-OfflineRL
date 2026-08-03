@@ -15,7 +15,8 @@ engage, and whether weapons are free::
 
     nav    (2, continuous)   sub-goal displacement in metres, scaled to [-1, 1]
     fire   (1, Bernoulli)    weapons-free gate for this second
-    target (7, Categorical)  which enemy to prioritise; class 6 = "no target"
+    target (9, Categorical)  six enemy vehicles, enemy outpost, enemy base,
+                             then "no target"
 
 The target label is a **soft** distribution rather than a one-hot class.  The
 referee log never records who was being shot at, so we recover it from the
@@ -32,9 +33,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-# 6 enemy slots (schema.MOBILE_TYPES order) + one "engage nobody" class
-N_TARGET_CLASSES = 7
-NO_TARGET = 6
+# 6 mobile slots + enemy outpost + enemy base + one "engage nobody" class.
+# Old 10-D tactical checkpoints (seven target slots) remain loadable through
+# get_spec(action_mode, act_dim); their local no-target index is 6.
+N_TARGET_CLASSES = 9
+NO_TARGET = 8
 
 
 @dataclass(frozen=True)
@@ -77,7 +80,12 @@ CONTINUOUS_NAMES = ("vx", "vy", "yaw_rate", "fire")
 def get_spec(action_mode: str = "velocity", act_dim: int | None = None) -> ActionSpec:
     """Resolve the spec from a dataset's ``action_mode`` (see meta.json)."""
     if action_mode == "tactical":
-        return TACTICAL
+        if act_dim is None:
+            return TACTICAL
+        n_target = int(act_dim) - 3
+        if n_target < 2:
+            raise ValueError(f"invalid tactical action dimension: {act_dim}")
+        return ActionSpec("tactical", 2, 1, n_target)
     return ActionSpec("continuous", int(act_dim or 4), 0, 0)
 
 

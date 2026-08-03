@@ -1,0 +1,14 @@
+{
+  "styles": [
+    "aggressive",
+    "pressure",
+    "measured"
+  ],
+  "counts_game_camp": {
+    "aggressive": 408,
+    "pressure": 408,
+    "measured": 410
+  },
+  "definition": "pressure: high enemy-building damage + advance; aggressive: high fire density + advance among non-pressure; measured: remaining cases",
+  "split": "one style per whole game/camp; source match-level train/validation split retained"
+}

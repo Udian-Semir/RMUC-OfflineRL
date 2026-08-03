@@ -13,13 +13,14 @@ scripted participant.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Iterable, Literal
 
 import numpy as np
 
-from rm_rl.algos.action_spec import NO_TARGET
 from rm_rl.data import schema as S
-from rm_rl.data.features import Entity, GameArrays, build_obs, obs_dim
+from rm_rl.data.features import TACTICAL_TARGET_TYPES, Entity, GameArrays, build_obs, obs_dim
 from rm_rl.deploy import MLPPolicyRunner
 
 from .semantic_map import Cell, SemanticMap
@@ -44,7 +45,10 @@ class RefereeEntityState:
     alive: bool = True
     heat17: float = 0.0
     heat17_max: float | None = None
+    heat42: float = 0.0
+    heat42_max: float | None = None
     ammo17_fired: float = 0.0
+    ammo42_fired: float = 0.0
     yaw_deg: float = 0.0
     power_w: float = 0.0
     vulnerable: bool = False
@@ -70,10 +74,12 @@ class TacticalRefereeState:
     red_coin_total: float = 0.0
     blue_coin_left: float = 0.0
     blue_coin_total: float = 0.0
-    # The historical dataset uses these leak-safe fixed team priors.  A live
-    # simulator does not have school histories, so their conservative default
-    # is zero until a dedicated opponent-style estimator supplies them.
-    team_features: tuple[float, float, float, float, float, float] = (0.0,) * 6
+    # The historical dataset uses fixed per-team (win-rate, aggression,
+    # durability) priors.  A fresh simulator has no school identity, so use
+    # the data builder's explicit neutral prior rather than an impossible
+    # all-zero team.  A future opponent-style estimator may replace either
+    # three-value half with measured values.
+    team_features: tuple[float, float, float, float, float, float] = (0.5, 1.0, 1.0, 0.5, 1.0, 1.0)
 
 
 @dataclass(frozen=True)
@@ -99,13 +105,16 @@ def from_tactical_env(env: "SentryTacticalEnv") -> TacticalRefereeState:
         RefereeEntityState(
             role=unit.role,
             team=unit.team,
-            cell=unit.cell,
+            cell=env.map.cell_to_meters(unit.cell),
             hp=unit.hp,
             max_hp=unit.max_hp,
             alive=unit.alive,
             heat17=unit.heat,
-            heat17_max=260.0 if unit.role == "sentry" else None,
-            ammo17_fired=max(0.0, 300.0 - unit.ammo) if unit.role == "sentry" else 0.0,
+            heat17_max=unit.observation_heat17_max,
+            heat42_max=unit.observation_heat42_max,
+            ammo17_fired=float(unit.shots_fired),
+            yaw_deg=unit.yaw_deg,
+            power_w=unit.power_w,
         )
         for unit in units
         if unit.role
@@ -182,19 +191,54 @@ class OfflineSparringPolicy:
         self.role = role
         self.runner = MLPPolicyRunner(run_dir, device=device, camp=_CAMP[team])
         info = self.runner.info
-        if info["action_mode"] != "tactical" or info["obs_dim"] != 161 or info["act_dim"] != 10:
-            raise ValueError("sparring adapter requires a 161-D tactical offline checkpoint")
+        if info["action_mode"] != "tactical" or info["obs_dim"] != 161 or info["act_dim"] not in (10, 12):
+            raise ValueError("sparring adapter requires a 161-D tactical checkpoint with 10-D legacy or 12-D building targets")
+        # Preserve existing sparring checkpoints while allowing newly trained
+        # 12-D policies to select an outpost or base explicitly.
+        self.target_labels = (
+            tuple(S.MOBILE_TYPES) if info["act_dim"] == 10 else TACTICAL_TARGET_TYPES
+        )
+        with (Path(run_dir) / "meta.json").open("r", encoding="utf-8") as handle:
+            metadata = json.load(handle)
+        configured_roles = metadata.get("agent_types") or [metadata.get("agent_type", role)]
+        expanded_roles: list[str] = []
+        for item in configured_roles:
+            expanded_roles.extend(S.resolve_agents(str(item)))
+        self.supported_roles = frozenset(S.resolve_agent(item) for item in expanded_roles)
+        if S.resolve_agent(role) not in self.supported_roles:
+            raise ValueError(f"checkpoint does not support requested role {role!r}")
 
     def act(self, state: TacticalRefereeState) -> SparringCommand:
-        obs = build_offline_observation(state, ego_role=self.role, ego_team=self.team)
+        return self.act_for(state, role=self.role)
+
+    def act_for(self, state: TacticalRefereeState, *, role: str) -> SparringCommand:
+        """Infer a command for one supported fixed roster slot.
+
+        The infantry checkpoint is trained on pooled infantry-3/infantry-4
+        data.  Its weights can therefore be shared while the observation still
+        identifies the concrete referee slot that is acting.
+        """
+        ego_role = S.resolve_agent(role)
+        if ego_role not in self.supported_roles:
+            raise ValueError(f"checkpoint does not support requested role {role!r}")
+        obs = build_offline_observation(state, ego_role=ego_role, ego_team=self.team)
         decoded = self.runner.step(obs)
-        ego = _find_entity(state.entities, self.role, self.team)
-        goal = self.semantic_map.nearest_free(self.semantic_map.clamp_cell((
-            int(np.floor(ego.cell[0] + decoded["goal_dx"])),
-            int(np.floor(ego.cell[1] + decoded["goal_dy"])),
-        ))) or ego.cell
+        ego = _find_entity(state.entities, ego_role, self.team)
+        goal_m = (ego.cell[0] + decoded["goal_dx"], ego.cell[1] + decoded["goal_dy"])
+        requested_goal = self.semantic_map.meters_to_cell(goal_m)
+        # Airborne movement is deliberately not projected onto the ground
+        # occupancy grid. Ground roles still need a reachable A* goal.
+        if ego_role == S.TYPE_AERIAL:
+            goal = requested_goal
+        else:
+            goal = self.semantic_map.nearest_free(requested_goal)
+            if goal is None:
+                goal = self.semantic_map.meters_to_cell(ego.cell)
         target_index = decoded["target"]
-        target_role = None if target_index is None or target_index == NO_TARGET else S.MOBILE_TYPES[int(target_index)]
+        target_role = (
+            None if target_index is None or int(target_index) >= len(self.target_labels)
+            else self.target_labels[int(target_index)]
+        )
         return SparringCommand(
             goal_cell=goal,
             fire_allowed=bool(decoded["fire"] > 0.5),
@@ -206,9 +250,10 @@ class OfflineSparringPolicy:
 
 def _mobile_entity(item: RefereeEntityState) -> Entity:
     heat_limit = _default_heat_limit(item.referee_role) if item.heat17_max is None else item.heat17_max
+    heat42_limit = 0.0 if item.heat42_max is None else item.heat42_max
     return Entity(
-        x=np.asarray([item.cell[0] + 0.5], dtype=np.float32),
-        y=np.asarray([item.cell[1] + 0.5], dtype=np.float32),
+        x=np.asarray([item.cell[0]], dtype=np.float32),
+        y=np.asarray([item.cell[1]], dtype=np.float32),
         z=np.zeros(1, dtype=np.float32),
         hp=np.asarray([max(0.0, item.hp)], dtype=np.float32),
         maxhp=np.asarray([max(1.0, item.max_hp)], dtype=np.float32),
@@ -216,10 +261,10 @@ def _mobile_entity(item: RefereeEntityState) -> Entity:
         power=np.asarray([max(0.0, item.power_w)], dtype=np.float32),
         heat17=np.asarray([max(0.0, item.heat17)], dtype=np.float32),
         heat17_max=np.asarray([max(0.0, heat_limit)], dtype=np.float32),
-        heat42=np.zeros(1, dtype=np.float32),
-        heat42_max=np.zeros(1, dtype=np.float32),
+        heat42=np.asarray([max(0.0, item.heat42)], dtype=np.float32),
+        heat42_max=np.asarray([max(0.0, heat42_limit)], dtype=np.float32),
         ammo17=np.asarray([max(0.0, item.ammo17_fired)], dtype=np.float32),
-        ammo42=np.zeros(1, dtype=np.float32),
+        ammo42=np.asarray([max(0.0, item.ammo42_fired)], dtype=np.float32),
         coin_left=np.zeros(1, dtype=np.float32),
         coin_total=np.zeros(1, dtype=np.float32),
         vuln=np.asarray([float(item.vulnerable)], dtype=np.float32),

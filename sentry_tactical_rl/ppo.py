@@ -57,6 +57,10 @@ class PPOTrainer:
             "path_risk": [],
             "damage_dealt": [],
             "damage_taken": [],
+            "sentry_blue_outpost_damage": [],
+            "sentry_blue_base_damage": [],
+            "ally_blue_outpost_damage": [],
+            "ally_blue_base_damage": [],
             "blue_outpost_damage": [],
             "red_outpost_damage": [],
             "blue_base_damage": [],
@@ -65,6 +69,7 @@ class PPOTrainer:
             "invalid_action": [],
             "goal_switch": [],
             "goal_switch_blocked": [],
+            "blue_autoaim_probability": [],
         }
         for _ in range(self.config.rollout_steps):
             maps, vectors, goals, targets = self._tensor_obs(self.obs)
@@ -77,6 +82,10 @@ class PPOTrainer:
             telemetry["path_risk"].append(float(info.get("path_risk", 0.0)))
             telemetry["damage_dealt"].append(float(info.get("damage_dealt", 0.0)))
             telemetry["damage_taken"].append(float(info.get("damage_taken", 0.0)))
+            telemetry["sentry_blue_outpost_damage"].append(float(info.get("sentry_blue_outpost_damage", 0.0)))
+            telemetry["sentry_blue_base_damage"].append(float(info.get("sentry_blue_base_damage", 0.0)))
+            telemetry["ally_blue_outpost_damage"].append(float(info.get("ally_blue_outpost_damage", 0.0)))
+            telemetry["ally_blue_base_damage"].append(float(info.get("ally_blue_base_damage", 0.0)))
             telemetry["blue_outpost_damage"].append(float(info.get("blue_outpost_damage", 0.0)))
             telemetry["red_outpost_damage"].append(float(info.get("red_outpost_damage", 0.0)))
             telemetry["blue_base_damage"].append(float(info.get("blue_base_damage", 0.0)))
@@ -85,6 +94,7 @@ class PPOTrainer:
             telemetry["invalid_action"].append(float(bool(info.get("invalid_action", False))))
             telemetry["goal_switch"].append(float(bool(info.get("goal_switch", False))))
             telemetry["goal_switch_blocked"].append(float(bool(info.get("goal_switch_blocked", False))))
+            telemetry["blue_autoaim_probability"].append(float(info.get("blue_autoaim_probability", 0.0)))
             for key, source in (("map", self.obs["map"]), ("vector", self.obs["vector"]),
                                 ("goal_mask", self.obs["goal_mask"]), ("target_mask", self.obs["target_mask"]),
                                 ("action", action_np), ("log_prob", log_prob.item()), ("value", value.item()),
@@ -169,3 +179,15 @@ class PPOTrainer:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         torch.save({"model": self.model.state_dict(), "optimizer": self.optimizer.state_dict(), "extra": extra or {}}, path)
+
+    def load(self, path: str | Path, *, load_optimizer: bool = True) -> dict[str, Any]:
+        """Restore a PPO checkpoint and return its metadata.
+
+        Loading the optimizer is the default for genuine continuation training;
+        callers can disable it for policy-only evaluation or fine-tuning.
+        """
+        payload = torch.load(Path(path), map_location=self.device)
+        self.model.load_state_dict(payload["model"])
+        if load_optimizer and payload.get("optimizer"):
+            self.optimizer.load_state_dict(payload["optimizer"])
+        return dict(payload.get("extra") or {})

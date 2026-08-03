@@ -1,0 +1,58 @@
+{
+  "agent_type": "英雄",
+  "agent_types": [
+    "英雄"
+  ],
+  "obs_dim": 161,
+  "action_dim": 12,
+  "expected_obs_dim": 161,
+  "expected_action_dim": 12,
+  "n_train_episodes": 369,
+  "n_train_transitions": 153737,
+  "n_val_episodes": 37,
+  "n_val_transitions": 15323,
+  "act_scale": [
+    6.949999809265137,
+    7.0260009765625,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0
+  ],
+  "reward": {
+    "w_outpost_atk": 3.0,
+    "w_base_atk": 5.0,
+    "w_dmg_deal": 1.0,
+    "w_kill": 2.0,
+    "w_outpost_def": 3.0,
+    "w_base_def": 5.0,
+    "w_dmg_take": 1.0,
+    "w_death": 2.0,
+    "w_ego_surv": 0.02,
+    "w_ego_hp": 1.0,
+    "w_heat": 0.5,
+    "w_econ": 0.5,
+    "w_win": 20.0,
+    "w_final_base": 5.0
+  },
+  "field": {
+    "x": 28.0,
+    "y": 15.0
+  },
+  "match_seconds": 420.0,
+  "vis_radius": 0.0,
+  "vis_dropout": 0.0,
+  "action_mode": "tactical",
+  "goal_horizon": 5,
+  "vis_map": true,
+  "team_prior": true,
+  "sparring_style": "pressure",
+  "style_partition": "whole game/camp; source train/val split retained",
+  "source_dataset": "data/hero_tactical_buildings"
+}
