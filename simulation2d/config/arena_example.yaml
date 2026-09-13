@@ -1,0 +1,37 @@
+# Illustrative format only.  Replace with a surveyed field map and sentry-only
+# passability data; coordinates are one-metre tactical grid cells (x, y).
+width: 28
+height: 15
+objectives:
+  red_outpost: [5, 7]
+  blue_outpost: [22, 7]
+  red_base: [1, 7]
+  blue_base: [26, 7]
+hard_blocked:
+  - [12, 4]
+  - [13, 4]
+  - [12, 5]
+  - [13, 5]
+  - [15, 4]
+  - [16, 4]
+  - [15, 5]
+  - [16, 5]
+  # Add every cell a sentry must never enter: impassable slope, narrow gap,
+  # static obstacle and forbidden border.  Do not encode these as soft cost.
+static_cost:
+  - cell: [0, 0]
+    cost: 0.35
+  # Add low-level soft preference here only; radar threat is dynamic.
+anchors:
+  red_outpost_cover_w: [4, 4]
+  red_outpost_cover_e: [7, 10]
+  red_supply: [3, 12]
+  mid_upper_cover: [10, 2]
+  mid_lower_cover: [11, 12]
+  mid_upper_cross: [18, 2]
+  mid_lower_cross: [18, 12]
+  blue_outpost_cover_w: [20, 4]
+  blue_outpost_cover_e: [23, 10]
+  blue_supply: [24, 2]
+  safe_retreat: [3, 7]
+  blue_pressure: [21, 7]

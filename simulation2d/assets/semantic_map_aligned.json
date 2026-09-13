@@ -4,11 +4,11 @@
     "y_m": 15.0,
     "origin": "lower_left"
   },
-  "obstacle_map": "sentry_tactical_rl/assets/blackwhite_map.png",
-  "astar_obstacle_map": "sentry_tactical_rl/assets/blackwhite_astar_inflated_0p35m.png",
+  "obstacle_map": "blackwhite_map.png",
+  "astar_obstacle_map": "blackwhite_astar_inflated_0p35m.png",
   "astar_clearance_m": 0.35,
   "astar_resolution_m": 0.1,
-  "annotation_map": "sentry_tactical_rl/assets/demo_map.png",
+  "annotation_map": "demo_map.png",
   "regions": [
     {
       "id": "base_1",

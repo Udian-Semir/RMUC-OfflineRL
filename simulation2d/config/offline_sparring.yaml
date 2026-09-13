@@ -1,0 +1,29 @@
+env:
+  horizon: 420
+  seed: 7
+  sensor_range: 13.0
+  decision_seconds: 1.0
+  goal_hold_seconds: 0.0
+  sparring_backend: offline
+  # Match the 1 Hz referee transition used to build the offline checkpoints.
+  # Keep this pure while diagnosing whether the learned fire gate transfers.
+  sparring_update_seconds: 1.0
+  sparring_device: cpu
+  # The learned one-second firing event is used directly for this diagnostic.
+  sparring_fire_policy: offline
+train:
+  seed: 7
+  device: auto
+  updates: 200
+  rollout_steps: 256
+  epochs: 4
+  minibatch_size: 64
+  learning_rate: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_ratio: 0.2
+  entropy_coef: 0.01
+  value_coef: 0.5
+  max_grad_norm: 0.8
+  checkpoint_every: 25
+  out_dir: runs/sentry_tactical_offline_sparring

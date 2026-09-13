@@ -1,18 +1,18 @@
 # 单哨兵战术 RL Demo
 
-这是 [SENTRY_RL_PLAN.md](../SENTRY_RL_PLAN.md) 的第一版可运行骨架。它是**雷达站侧**的战术决策组件：策略看到语义地图、雷达式实体状态和每个候选目标的路径代价，选择 `goal`、攻击目标和交战模式；哨兵端的导航只负责验证和执行目标。
+这是 [Sentry_radar_side_decision.md](../Sentry_radar_side_decision.md) 的第一版可运行骨架。它是**雷达站侧**的战术决策组件：策略看到语义地图、雷达式实体状态和每个候选目标的路径代价，选择 `goal`、攻击目标和交战模式；哨兵端的导航只负责验证和执行目标。
 
-当前是纯 Python 的低保真 2D 战术环境，用于验证接口和训练链路。RMUC 2026 黑白障碍图、彩色语义标注图和 `semantic_map_aligned.json` 已作为第一版静态地图输入交付；像素对应可用 `python -m sentry_tactical_rl.tools.validate_semantic_map` 校验。加载器现在统一按 JSON 声明的下左角世界坐标存储障碍、目标锚点和语义多边形，避免它们在栅格中上下镜像。正式训练前仍需完成真实雷达坐标校准、哨兵专属通行掩码和精确增益触发区标定。`SemanticMap.demo()` 仍仅用于冒烟测试，不能替代正式地图。
+当前是纯 Python 的低保真 2D 战术环境，用于验证接口和训练链路。RMUC 2026 原始黑白障碍图、`0.35 m` 哨兵膨胀 A* 图、彩色语义标注图和 `semantic_map_aligned.json` 已作为第一版静态地图输入交付；像素对应可用 `python -m sentry_tactical_rl.tools.validate_semantic_map` 校验。加载器统一按 JSON 声明的下左角世界坐标存储障碍、目标锚点和语义多边形。主哨兵和蓝方哨兵使用膨胀图，英雄/工程/步兵使用原始物理图，空中单位不受地面障碍约束。正式部署前仍需完成真实雷达坐标校准和精确增益触发区标定。`SemanticMap.demo()` 仍仅用于冒烟测试，不能替代正式地图。
 
 ## 当前完成度
 
-已实现：语义地图/硬禁区、动态威胁与路径代价、候选 goal 生成、雷达可见性遮罩、`(goal, target, fire_mode)` 动作、反应式敌我陪练、PPO、动作 mask、checkpoint，以及到既有 Gazebo 战术/导航协议的 JSON 边界。`match_rules.py` 已实现基地 `5000 HP + 150` 虚拟护盾、前哨 `1500 HP`、前哨存活时基地无敌、累计基地失血重建机会、300 秒重建截止、60/180/300 秒阶段状态，以及官方终局比较顺序。当前环境已经以真实建筑伤害替代“在前哨区域内站人就扣血”的旧逻辑。`sparring_adapter.py` 会从环境快照构造与 offlineRL 训练完全同序的 161 维向量；环境已补齐双方六角色固定槽位，红方哨兵之外的 11 个单位可用冻结 IQL checkpoint 每 5 秒生成子目标，并由 A*/射线/弹药/热量检查执行。
+已实现：语义地图/硬禁区、动态威胁与路径代价、候选 goal 生成、雷达可见性遮罩、`(goal, target, fire_mode)` 动作、反应式敌我陪练、PPO、动作 mask、checkpoint、4 子进程并行环境，以及到既有 Gazebo 战术/导航协议的 JSON 边界。60 s 后蓝方前哨使用前方过道约 7 m 的固定合法射击位 `(9.35, 10.65)m`；由于前哨为高目标，该指定点允许专用射界，不改变车辆交战的普通 LOS 规则。Aerial 明确选择建筑时会切到稳定空中攻击位，并忽略地面障碍射线；车辆/建筑连续停留和火控规则仍然生效。若当前一秒的合法入射伤害足以击穿哨兵 HP，则优先锁定最大伤害威胁单位。并行 worker 使用独立 seed，栅格观测通过共享内存传递，GAE 按各局 `done` 边界独立计算。`match_rules.py` 已实现基地 `5000 HP + 150` 虚拟护盾、前哨 `1500 HP`、前哨存活时基地无敌、累计基地失血重建机会、300 秒重建截止、60/180/300 秒阶段状态，以及官方终局比较顺序。当前环境已经以真实建筑伤害替代“在前哨区域内站人就扣血”的旧逻辑。`sparring_adapter.py` 会从环境快照构造与 offlineRL 训练完全同序的 161 维向量；环境已补齐双方六角色固定槽位，红方哨兵之外的 11 个单位可用冻结 IQL checkpoint 每 5 秒生成子目标，并由 A*/射线/弹药/热量检查执行。
 
-暂未实现：正式场地地图的坐标/通行校准、真实命中盒/弹道、经济与兑换、完整等级/经验与弱化状态、能量机关、完整姿态系统、堡垒储备弹药和有序隧道触发、雷达输入桥接、ROS2 发布节点、批量/向量化陪练推理、多个风格 checkpoint 的策略池，以及实车标定。地面单位目前会在阵亡读条后于己方补给区以 10% HP 和 10 秒无敌回归；空中单位只能攻击、不能被攻击。普通步兵/空中车辆的目标锁定伤害在 3 m/5 m 圈内按 `140/70 HP/s` 结算；建筑为 `200 HP/s`，但还必须同时有离线 `fire_gate` 和靠近建筑的移动意图，避免把路过前哨错当推塔。英雄为 `200 HP/4 s`，哨兵保留原有单发模型。它们仍是待实测标定的 2D 战术近似，不得将 offline 陪练模式的 PPO 曲线视为正式比赛实力。
+暂未实现：正式场地地图的坐标/通行校准、真实命中盒/弹道、经济与兑换、完整等级/经验与弱化状态、能量机关、完整姿态系统、堡垒储备弹药和有序隧道触发、雷达输入桥接、ROS2 发布节点、批量/向量化陪练推理、多个风格 checkpoint 的策略池，以及实车标定。地面单位目前会在阵亡读条后于己方补给区以 10% HP 和 30 秒无敌回归；空中单位只能攻击、不能被攻击。普通有效 DPS 单位的目标锁定伤害在 3 m/5 m 圈内按 `140/70 HP/s` 结算，哨兵为 `180/100 HP/s`；建筑为 `200 HP/s`，还必须满足目标意图、射程、视线和连续停留，避免把路过前哨错当推塔。英雄为 `200 HP/4 s`。它们仍是待实测标定的 2D 战术近似，不得将 offline 陪练模式的 PPO 曲线视为正式比赛实力。
 
 ### 雷达侧传统代价计算
 
-`radar_costmap.py` 是 RL 之外的传统算法层：它读取 ROS 静态地图，按哨兵半径膨胀障碍生成硬禁区，融合雷达敌方 track 为威胁场，并输出候选 goal 的可达性和 A* 路径代价。RL 不应自己猜测“能不能过狗洞/起伏路”。
+`radar_costmap.py` 是 RL 之外的传统算法层：它读取 ROS 静态地图，按 `0.35 m` 欧氏净空膨胀障碍生成硬禁区，融合雷达敌方 track 为威胁场，并输出候选 goal 的可达性和 A* 路径代价。窄通道使用障碍距离 cost 选择安全中线；宽阔区域保留所有满足净空的位置。RL 不应自己猜测“能不能过狗洞/起伏路”。
 
 `radar_features.py` 进一步将每个语义锚点的 `reachable / path_cost / path_length / mean_threat` 和多通道代价栅格构造成策略输入。这就是后续真实雷达状态接入 PPO 推理模型的前置层。
 
@@ -37,7 +37,17 @@ python3.10 -m sentry_tactical_rl.costmap_smoke \
 
 ## 地图校准
 
-当前 A* 已对交付的 1 m 战术栅格验证基地、前哨和全部语义锚点的连通性；这只说明 PNG 投影后的离散地图没有自相矛盾，**不**证明实车可通过。先填写
+当前 A* 已对交付的 0.1 m 哨兵膨胀栅格验证基地、前哨、四条 tunnel 和全部语义锚点的连通性；这只说明 PNG 投影后的离散地图没有自相矛盾，**不**证明实车可通过。膨胀图可用下面命令确定性重建：
+
+```bash
+python3.10 -m sentry_tactical_rl.tools.export_inflated_astar_map \
+  --json sentry_tactical_rl/assets/semantic_map_aligned.json \
+  --obstacle-map sentry_tactical_rl/assets/blackwhite_map.png \
+  --clearance-m 0.35 \
+  --out sentry_tactical_rl/assets/blackwhite_astar_inflated_0p35m.png
+```
+
+原始图用于物理障碍和射线，膨胀图只用于哨兵中心的 goal/A*；实车本地 ESDF 仍需做最后安全投影。先填写
 `sentry_tactical_rl/assets/radar_landmark_template.json` 中四个 `world_xy_m`：它们必须是同一物理中心在雷达/裁判 `map` 坐标系的实测位置，不要填 Foxglove 预览读数。
 
 ```bash
@@ -53,7 +63,7 @@ python3.10 -m sentry_tactical_rl.costmap_smoke \
 
 ## 本机训练状态
 
-本机 RTX 5070 Laptop GPU（8 GB）已用 CUDA PyTorch 跑通 5 次 PPO 更新，约 6.5 秒；当前不需要 AutoDL。请使用 `~/miniconda3/envs/nerfstudio/bin/python`（CUDA）运行训练；系统默认 Python 3.13 没有安装 torch。
+本轮使用系统 `python3` 的 CPU PyTorch 和 4 个并行环境：每个环境采样 32 步，每次更新合计 128 样本；60 次更新耗时约 1005 秒，主进程峰值 RSS 约 1.27 GB。RTX 5070 可见，但该解释器的 torch 为 CPU build；切换 CUDA 环境前必须重新跑并行冒烟测试，不能只根据 `nvidia-smi` 判断训练已经在 GPU 上。
 
 ## 快速运行
 
@@ -61,6 +71,10 @@ python3.10 -m sentry_tactical_rl.costmap_smoke \
 python3.10 -m sentry_tactical_rl.smoke
 ~/miniconda3/envs/nerfstudio/bin/python -m unittest discover -s tests -v
 python3.10 -m sentry_tactical_rl.train --config sentry_tactical_rl/configs/demo.yaml
+# 4 个独立比赛环境并行采样，32 x 4 = 128 samples/update
+python3 -m sentry_tactical_rl.train \
+  --config sentry_tactical_rl/configs/online_ppo_hp20_inflated035_parallel4.yaml \
+  --map-json sentry_tactical_rl/assets/semantic_map_aligned.json
 # 训练时实时查看 reward / cost / 伤害 / 目标切换曲线
 python3.10 -m sentry_tactical_rl.train --config sentry_tactical_rl/configs/demo.yaml --live
 # 使用已交付的 RMUC 2026 语义图和黑白障碍图，并单独保存结果
@@ -72,6 +86,7 @@ python3.10 -m sentry_tactical_rl.train \
 # 使用完整 roster 与冻结 IQL 陪练（当前是未校准的战术仿真，不是正式结论）
 python3.10 -m sentry_tactical_rl.train \
   --config sentry_tactical_rl/configs/offline_sparring.yaml
+```
 
 ## Database Sentry Hybrid Replay
 
@@ -89,7 +104,6 @@ python3.10 -m sentry_tactical_rl.tools.replay_database_sentry_sparring \
 It writes `replay.gif`, `final.png`, `replay.csv`, and `summary.json` under
 `runs/database_sentry_sparring_<game_id>_<camp>/`. Press `Esc` to stop a live
 OpenCV window early; omit `--live` to generate only the files.
-```
 
 训练依赖 `numpy`、`torch` 和可选的 `matplotlib` 实时窗口。本工作区默认 `python` 是没有 torch 的 Python 3.13；请使用装有 torch 的 Python 3.10 或团队的 conda 环境。即使不加 `--live`，默认 checkpoint 和 `metrics.csv` 仍会写入 `runs/sentry_tactical_demo/`；加上 `--live` 后还会持续刷新 `training_live.png`。
 
@@ -136,7 +150,9 @@ domain，可将目标 domain 作为首个参数，例如
 
 每个候选点都由传统 A* 计算路径总代价和可达性。仿真中不允许穿过硬禁区；真实部署时应由现有导航栈接管该职责。
 
-当前 demo 使用离散锚点；追击时不再使用全局 5 秒硬保持，以允许每秒更新目标。连续 `goal_xy`、目标变化率限制、3 m 交战环和短时域候选重排仍需在动作执行器阶段实现。
+当前 demo 使用离散锚点。规则层和 A* 投影后的 `goal_xy` 会作为当前路线终点锁存，直到哨兵进入默认 `0.35 m` 到达容差；移动地面 target 在哨兵行驶期间只更新 target 显示并排队下一追击点，不会反复替换当前路线。哨兵到达后，下一个决策周期才按 target 新位置计算射击站位和切换路线；这种到点后的追击点更新不计入 PPO 的 goal-switch 惩罚。低血量回补给区和 60 秒后仍存活的敌方前哨命令可以抢占普通路线，无法规划的 goal 会释放锁存以避免死锁。
+
+回放中的橙色十字是规则层和 A* 投影后真正准备发布的 goal，不是网络原始 anchor。顶部第三行逐秒显示 `goal=(x,y)m`、最终 `target` 和 `fire`；同样的数据写入 `steps.csv` 的 `published_goal_x_m / published_goal_y_m / published_target / published_fire` 字段。
 
 ## 与 Gazebo 导航工程的边界
 

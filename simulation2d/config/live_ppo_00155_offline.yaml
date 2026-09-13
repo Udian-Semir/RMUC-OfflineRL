@@ -1,0 +1,19 @@
+env:
+  horizon: 420
+  seed: 44
+  sensor_range: 13.0
+  decision_seconds: 1.0
+  goal_hold_seconds: 1.0
+  goal_reach_tolerance_m: 0.35
+  sparring_backend: offline
+  sparring_update_seconds: 1.0
+  sparring_device: cpu
+  sparring_fire_policy: intent_dps
+  blue_sparring_profiles: [aggressive, pressure, measured]
+  sparring_run_dirs:
+    hero: rm_runs/hero_iql_tactical_buildings
+    engineer: rm_runs/engineer_iql_tactical_buildings
+    infantry3: rm_runs/infantry_iql_tactical_buildings
+    infantry4: rm_runs/infantry_iql_tactical_buildings
+    aerial: rm_runs/aerial_iql_tactical_buildings
+    sentry: rm_runs/blue_sentry_iql_tactical_buildings

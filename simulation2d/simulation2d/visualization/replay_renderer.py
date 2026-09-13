@@ -7,8 +7,8 @@ from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
 
-from sentry_tactical_rl.env import EFFECTIVE_DPS_ROLES, REFEREE_ROLE_NAMES, SENTRY_EFFECTIVE_DPS_ROLE, Unit
-from sentry_tactical_rl.semantic_map import SemanticMap
+from ..world.environment import EFFECTIVE_DPS_ROLES, REFEREE_ROLE_NAMES, SENTRY_EFFECTIVE_DPS_ROLE, Unit
+from ..world.semantic_map import SemanticMap
 
 
 def battlefield_base(path: Path, width: int) -> Image.Image:

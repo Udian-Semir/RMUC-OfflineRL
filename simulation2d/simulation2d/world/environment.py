@@ -13,7 +13,7 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from .match_rules import MatchState, Team
+from .rules import MatchState, Team
 from .navigation import GridNavigationBackend
 from .semantic_map import Cell, SemanticMap
 
@@ -348,7 +348,7 @@ class SentryTacticalEnv:
         The red sentry remains the PPO-controlled entity.  The pooled infantry
         checkpoint is reused for both infantry slots through ``act_for``.
         """
-        from .sparring_adapter import OfflineSparringPolicy
+        from ..agents.offline_sparring import OfflineSparringPolicy
 
         for team in ("red", "blue"):
             for role in ROLE_SPECS:
@@ -372,11 +372,16 @@ class SentryTacticalEnv:
 
     def _load_sparring_policy(self, policy_type: Any, *, team: Team, role: str,
                               configured: str) -> tuple[str, str]:
-        repository_root = Path(__file__).resolve().parents[1]
         requested = Path(configured)
         if requested.is_absolute():
             run_dir = requested
         else:
+            candidates = (Path.cwd(), *Path(__file__).resolve().parents)
+            repository_root = next(
+                (root for root in candidates
+                 if (root / "rm_runs").is_dir() and (root / "rm_rl").is_dir()),
+                Path(__file__).resolve().parents[2],
+            )
             direct = repository_root / requested
             run_dir = direct if direct.exists() else repository_root / "rm_runs" / requested
         if not run_dir.is_dir():
@@ -509,6 +514,7 @@ class SentryTacticalEnv:
         if 0 <= goal_idx < self.n_goals:
             selected_anchor = self.map.anchors[self.anchor_names[goal_idx]]
             selected_goal = self._sentry_execution_goal(selected_anchor, target_idx)
+
         target_goal_moved = (
             pursuit_target is not None
             and selected_goal is not None
@@ -545,9 +551,9 @@ class SentryTacticalEnv:
         info["executed_goal_idx"] = goal_idx
         info["goal_switch"] = anchor_switched
         info["concrete_goal_changed"] = concrete_goal_changed
-        info["goal_switch_blocked"] = goal_switch_blocked
         info["goal_target_replan"] = target_replan
         info["goal_target_replan_deferred"] = target_replan_deferred
+        info["goal_switch_blocked"] = goal_switch_blocked
         info["goal_commitment_active"] = self._goal_commitment_active()
         info["goal_reached"] = self.active_goal_reached
         info["goal_switch_reason"] = (
@@ -1128,10 +1134,12 @@ class SentryTacticalEnv:
 
     def _step_offline_sparring(self) -> dict[str, float]:
         """Execute frozen five-second intents without bypassing simulation safety."""
+        # Let a unit whose respawn reader reaches zero join this tick's policy
+        # snapshot instead of standing idle for one extra decision cycle.
+        self._advance_respawns()
         if not self._sparring_commands or self.step_count % self.sparring_update_steps == 0:
             self._refresh_offline_sparring_commands()
 
-        self._advance_respawns()
         units = self._sparring_units()
         for unit in units:
             self._cool_unit(unit)
@@ -1155,7 +1163,7 @@ class SentryTacticalEnv:
         return result
 
     def _refresh_offline_sparring_commands(self) -> None:
-        from .sparring_adapter import from_tactical_env
+        from ..agents.offline_sparring import from_tactical_env
 
         snapshot = from_tactical_env(self)
         self._sparring_commands = {

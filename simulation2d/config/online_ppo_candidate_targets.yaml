@@ -1,0 +1,34 @@
+env:
+  horizon: 420
+  seed: 41
+  sensor_range: 13.0
+  decision_seconds: 1.0
+  goal_hold_seconds: 1.0
+  sparring_backend: offline
+  sparring_update_seconds: 1.0
+  sparring_device: cpu
+  sparring_fire_policy: intent_dps
+  blue_sparring_profiles: [aggressive, pressure, measured]
+  sparring_run_dirs:
+    hero: rm_runs/hero_iql_tactical_buildings
+    engineer: rm_runs/engineer_iql_tactical_buildings
+    infantry3: rm_runs/infantry_iql_tactical_buildings
+    infantry4: rm_runs/infantry_iql_tactical_buildings
+    aerial: rm_runs/aerial_iql_tactical_buildings
+    sentry: rm_runs/blue_sentry_iql_tactical_buildings
+train:
+  seed: 41
+  device: auto
+  updates: 60
+  rollout_steps: 128
+  epochs: 4
+  minibatch_size: 64
+  learning_rate: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_ratio: 0.2
+  entropy_coef: 0.02
+  value_coef: 0.5
+  max_grad_norm: 0.8
+  checkpoint_every: 5
+  out_dir: runs/sentry_ppo_candidate_targets_v1

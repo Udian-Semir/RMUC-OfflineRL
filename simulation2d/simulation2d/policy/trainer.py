@@ -9,8 +9,8 @@ import numpy as np
 import torch
 from torch import nn
 
-from .env import SentryTacticalEnv
-from .model import TacticalActorCritic
+from ..world.environment import SentryTacticalEnv
+from .network import TacticalActorCritic
 from .parallel_env import ParallelSentryEnvPool
 
 

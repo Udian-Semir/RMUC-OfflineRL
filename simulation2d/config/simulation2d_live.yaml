@@ -1,0 +1,30 @@
+simulation2d:
+  ros__parameters:
+    world_config: ""
+    semantic_map_json: ""
+    obstacle_map: ""
+    policy_mode: ppo
+    checkpoint_path: ""
+    device: cpu
+    deterministic: true
+    sparring_backend: offline
+    seed: 7
+    horizon: 420
+    decision_seconds: 1.0
+    update_rate_hz: 1.0
+    loop_episodes: true
+    start_paused: false
+    frame_id: map
+    battlefield_topic: /simulation2d/battlefield/state
+    goal_topic: /rl/policy_goal_pose
+    action_topic: /rl/tactical_action
+    state_topic: /simulation2d/state
+    markers_topic: /simulation2d/markers
+    target_topic: /simulation2d/selected_target_pose
+    target_label_topic: /simulation2d/selected_target_label
+    gazebo_pose_topic: /simulation2d/gazebo_sentry_pose
+    goal_feedback_topic: /simulation2d/gazebo_goal_feedback
+    controller_status_topic: /navigation/controller_status
+    gazebo_base_frame: base_footprint
+    gazebo_goal_tolerance_m: 0.35
+    enable_gazebo_feedback: true

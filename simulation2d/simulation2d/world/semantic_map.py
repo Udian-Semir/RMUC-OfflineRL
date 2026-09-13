@@ -18,7 +18,7 @@ import cv2
 import numpy as np
 import yaml
 
-from .radar_costmap import inflate_mask
+from ..mapping.costmap import inflate_mask
 
 Cell = tuple[int, int]  # (x, y), in one-metre tactical cells
 

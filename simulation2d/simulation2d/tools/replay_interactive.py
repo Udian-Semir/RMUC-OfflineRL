@@ -1,4 +1,4 @@
-"""Replay a trained sentry policy against frozen offlineRL sparring.
+"""Replay a trained sentry policy in the interactive 2D world.
 
 This is a diagnostic tool, not a trainer.  It runs one episode with a loaded
 PPO checkpoint, records every non-learning unit's command/position/fire state,
@@ -19,15 +19,15 @@ from PIL import Image, ImageDraw, ImageFont
 import torch
 import yaml
 
-from sentry_tactical_rl.env import SentryTacticalEnv, Unit
-from sentry_tactical_rl.model import TacticalActorCritic
-from sentry_tactical_rl.semantic_map import Cell, SemanticMap
+from ..world.environment import SentryTacticalEnv, Unit
+from ..policy.network import TacticalActorCritic
+from ..resources import asset_path, config_path
+from ..world.semantic_map import Cell, SemanticMap
 
 
-DEFAULT_CHECKPOINT = Path("runs/sentry_tactical_rmuc2026_offline_baseline_20260729_full/ppo_00200.pt")
-DEFAULT_MAP_JSON = Path("sentry_tactical_rl/assets/semantic_map_aligned.json")
-DEFAULT_OBSTACLE_MAP = Path("sentry_tactical_rl/assets/blackwhite_map.png")
-DEFAULT_BATTLEFIELD_MAP = Path("sentry_tactical_rl/assets/semantic_map_aligned.png")
+DEFAULT_MAP_JSON = asset_path("semantic_map_aligned.json")
+DEFAULT_OBSTACLE_MAP = asset_path("blackwhite_map.png")
+DEFAULT_BATTLEFIELD_MAP = asset_path("semantic_map_aligned.png")
 
 
 @dataclass
@@ -52,7 +52,7 @@ def _load_config(path: Path | None, checkpoint_payload: dict[str, Any]) -> dict[
     # simulator-side safety policy, though: old checkpoints do not know about
     # newly added legal-autoaim modes.  Fill only missing values from the live
     # offline-sparring config instead of silently replaying with legacy gates.
-    with Path("sentry_tactical_rl/configs/offline_sparring.yaml").open("r", encoding="utf-8") as handle:
+    with config_path("demo.yaml").open("r", encoding="utf-8") as handle:
         current_config = yaml.safe_load(handle)
     extra = checkpoint_payload.get("extra") or {}
     config = extra.get("config")
@@ -297,8 +297,8 @@ def _clone_units(units: list[Unit]) -> list[Unit]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Replay one PPO episode against frozen offlineRL sparring")
-    parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT)
+    parser = argparse.ArgumentParser(description="Replay one PPO episode in the interactive simulation2d world")
+    parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--config", type=Path, default=None)
     parser.add_argument("--map-json", type=Path, default=DEFAULT_MAP_JSON)
     parser.add_argument("--obstacle-map", type=Path, default=DEFAULT_OBSTACLE_MAP)
@@ -309,6 +309,12 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--steps", type=int, default=None)
     parser.add_argument("--device", default="auto")
+    parser.add_argument(
+        "--sparring-backend",
+        choices=("scripted", "offline"),
+        default="offline",
+        help="offline matches PPO training/replay; scripted is a self-contained debug opponent",
+    )
     parser.add_argument("--sample", action="store_true", help="sample PPO actions instead of deterministic argmax")
     parser.add_argument(
         "--blue-profile",
@@ -327,7 +333,7 @@ def main() -> None:
     train_cfg = dict(config.get("train", {}))
     if args.seed is not None:
         env_cfg["seed"] = args.seed
-    env_cfg["sparring_backend"] = "offline"
+    env_cfg["sparring_backend"] = args.sparring_backend
     if args.blue_profile is not None:
         env_cfg["blue_sparring_profiles"] = [args.blue_profile]
     if args.steps is not None:
@@ -346,7 +352,7 @@ def main() -> None:
 
     # Keep PPO and database/hybrid replays visually identical without pulling
     # the database tool (and its pandas dependency) into this CLI.
-    from sentry_tactical_rl.tools.replay_renderer import battlefield_base, building_hp, frame as render_replay_frame, write_mp4
+    from ..visualization.replay_renderer import battlefield_base, building_hp, frame as render_replay_frame, write_mp4
     battlefield = battlefield_base(args.battlefield_map, args.render_width)
 
     obs = env.reset(seed=int(env_cfg.get("seed", 7)))

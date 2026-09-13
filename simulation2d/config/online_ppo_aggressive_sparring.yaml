@@ -1,0 +1,32 @@
+env:
+  horizon: 420
+  seed: 31
+  sensor_range: 13.0
+  decision_seconds: 1.0
+  goal_hold_seconds: 0.0
+  sparring_backend: offline
+  sparring_update_seconds: 1.0
+  sparring_device: cpu
+  # Frozen offlineRL chooses each role's goal / target intent.  Either side
+  # receives the same hit-rate-adjusted DPS only after a selected target is
+  # inside its legal range and line of sight.
+  sparring_fire_policy: intent_dps
+  # Sample once per episode; this is combat-strength randomisation, not a
+  # claim that several route-policy checkpoints already exist.
+  blue_sparring_profiles: [aggressive, pressure, measured]
+train:
+  seed: 31
+  device: auto
+  updates: 120
+  rollout_steps: 256
+  epochs: 4
+  minibatch_size: 64
+  learning_rate: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_ratio: 0.2
+  entropy_coef: 0.01
+  value_coef: 0.5
+  max_grad_norm: 0.8
+  checkpoint_every: 25
+  out_dir: runs/sentry_tactical_rmuc2026_intent_damage_20260730

@@ -1,4 +1,4 @@
-"""CLI entry point: ``python -m sentry_tactical_rl.train --config ...``."""
+"""CLI entry point for training PPO in the simulation2d world."""
 from __future__ import annotations
 
 import argparse
@@ -10,10 +10,11 @@ import numpy as np
 import torch
 import yaml
 
-from .env import SentryTacticalEnv
-from .live_plot import TrainingDashboard
-from .ppo import PPOConfig, PPOTrainer
-from .semantic_map import SemanticMap
+from ..world.environment import SentryTacticalEnv
+from ..visualization.dashboard import TrainingDashboard
+from ..resources import asset_path, config_path
+from .trainer import PPOConfig, PPOTrainer
+from ..world.semantic_map import SemanticMap
 
 
 def _device(value: str) -> str:
@@ -22,7 +23,7 @@ def _device(value: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train the single-sentry tactical PPO demo")
-    parser.add_argument("--config", default="sentry_tactical_rl/configs/demo.yaml")
+    parser.add_argument("--config", default=str(config_path("demo.yaml")))
     parser.add_argument("--map-yaml", default=None, help="replace the synthetic map with a semantic-map YAML")
     parser.add_argument("--map-json", default=None,
                         help="load the aligned RMUC semantic JSON instead of the synthetic map")
@@ -48,8 +49,13 @@ def main() -> None:
         parser.error("use only one of --map-json and --map-yaml")
     if args.map_json:
         semantic_map = SemanticMap.from_aligned_json(args.map_json, obstacle_path=args.obstacle_map)
+    elif not args.map_yaml:
+        semantic_map = SemanticMap.from_aligned_json(
+            asset_path("semantic_map_aligned.json"),
+            obstacle_path=asset_path("blackwhite_map.png"),
+        )
     else:
-        semantic_map = SemanticMap.from_yaml(args.map_yaml) if args.map_yaml else None
+        semantic_map = SemanticMap.from_yaml(args.map_yaml)
     env = SentryTacticalEnv(semantic_map=semantic_map, **env_cfg)
     valid_ppo_fields = {field.name for field in fields(PPOConfig)}
     ppo = PPOConfig(**{key: value for key, value in train_cfg.items() if key in valid_ppo_fields})

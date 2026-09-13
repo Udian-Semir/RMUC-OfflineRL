@@ -5,6 +5,7 @@ from pathlib import Path
 import unittest
 from types import SimpleNamespace
 
+import cv2
 import numpy as np
 
 from sentry_tactical_rl.env import SentryTacticalEnv
@@ -171,6 +172,106 @@ class TacticalSemanticsTest(unittest.TestCase):
         self.assertLessEqual(env._distance(goal, target.cell), attacker.attack_range)
         self.assertTrue(env.map.line_of_sight(goal, target.cell))
 
+    def test_mid_hp_sentry_still_couples_target_to_firing_position(self) -> None:
+        env = SentryTacticalEnv(semantic_map=semantic_test_map(), seed=1)
+        target = env.enemies[2]
+        env.sentry.hp = 156.0
+        env.sentry.cell, target.cell = (3, 7), (20, 7)
+
+        goal = env._sentry_execution_goal(env.sentry.cell, 2)
+
+        self.assertNotEqual(goal, env.sentry.cell)
+        self.assertGreaterEqual(env._distance(goal, target.cell), 2.0)
+        self.assertLessEqual(env._distance(goal, target.cell), 3.0)
+        self.assertTrue(env.map.line_of_sight(goal, target.cell))
+
+    def test_sentry_recovery_starts_only_below_twenty_percent(self) -> None:
+        at_threshold = SentryTacticalEnv(semantic_map=semantic_test_map(), seed=1)
+        at_threshold.sentry.hp = at_threshold.sentry.max_hp * 0.20
+        action = at_threshold._scheduled_sentry_action(0, 2, at_threshold.FIRE_ENGAGE)
+        self.assertEqual(action, (0, 2, at_threshold.FIRE_ENGAGE))
+
+        below_threshold = SentryTacticalEnv(semantic_map=semantic_test_map(), seed=1)
+        below_threshold.sentry.hp = below_threshold.sentry.max_hp * 0.20 - 0.1
+        goal, target, fire = below_threshold._scheduled_sentry_action(
+            0, 2, below_threshold.FIRE_ENGAGE)
+
+        self.assertEqual(goal, below_threshold._sentry_supply_goal_index())
+        self.assertEqual(target, below_threshold.NONE_TARGET)
+        self.assertEqual(fire, below_threshold.FIRE_HOLD)
+
+    def test_sentry_latches_static_goal_until_it_is_reached(self) -> None:
+        tactical_map = SemanticMap.demo()
+        env = SentryTacticalEnv(
+            semantic_map=tactical_map, seed=1, goal_hold_seconds=1.0,
+            goal_reach_tolerance_m=0.35,
+        )
+        env.sentry.invulnerable_until_s = 999.0
+        goal_indices = sorted(
+            range(env.n_goals),
+            key=lambda index: env._distance(
+                env.sentry.cell, env.map.anchors[env.anchor_names[index]]),
+            reverse=True,
+        )
+        first_goal, second_goal = goal_indices[:2]
+
+        _, _, _, first = env.step((first_goal, env.NONE_TARGET, env.FIRE_HOLD))
+        latched_cell = first["execution_goal_cell"]
+        _, _, _, blocked = env.step((second_goal, env.NONE_TARGET, env.FIRE_HOLD))
+
+        self.assertTrue(blocked["goal_switch_blocked"])
+        self.assertFalse(blocked["goal_target_replan"])
+        self.assertEqual(blocked["execution_goal_cell"], latched_cell)
+
+        env.sentry.cell = latched_cell
+        _, _, _, arrival = env.step((second_goal, env.NONE_TARGET, env.FIRE_HOLD))
+        self.assertTrue(arrival["goal_reached"])
+        _, _, _, released = env.step((second_goal, env.NONE_TARGET, env.FIRE_HOLD))
+
+        self.assertFalse(released["goal_switch_blocked"])
+        self.assertEqual(released["executed_goal_idx"], second_goal)
+
+    def test_sentry_replans_standoff_after_reaching_current_route(self) -> None:
+        env = SentryTacticalEnv(
+            semantic_map=SemanticMap.demo(), seed=1, goal_hold_seconds=1.0,
+            goal_reach_tolerance_m=0.35,
+        )
+        env.sentry.invulnerable_until_s = 999.0
+        goal_idx = max(
+            range(env.n_goals),
+            key=lambda index: env._distance(
+                env.sentry.cell, env.map.anchors[env.anchor_names[index]]),
+        )
+        target = env.enemies[2]
+        target.cell = (20, 7)
+
+        _, _, _, first = env.step((goal_idx, 2, env.FIRE_HOLD))
+        first_goal = first["execution_goal_cell"]
+        target.cell = (16, 11)
+        _, _, _, deferred = env.step((goal_idx, 2, env.FIRE_HOLD))
+
+        self.assertFalse(deferred["goal_target_replan"])
+        self.assertTrue(deferred["goal_target_replan_deferred"])
+        self.assertTrue(deferred["goal_switch_blocked"])
+        self.assertFalse(deferred["concrete_goal_changed"])
+        self.assertEqual(deferred["execution_goal_cell"], first_goal)
+
+        env.sentry.cell = first_goal
+        env.active_goal_reached = True
+        target.cell = (16, 11)
+        _, _, _, replanned = env.step((goal_idx, 2, env.FIRE_HOLD))
+
+        self.assertTrue(replanned["goal_target_replan"])
+        self.assertFalse(replanned["goal_target_replan_deferred"])
+        self.assertTrue(replanned["concrete_goal_changed"])
+        self.assertFalse(replanned["goal_switch"])
+        self.assertNotEqual(replanned["execution_goal_cell"], first_goal)
+        self.assertLessEqual(
+            env._distance(replanned["execution_goal_cell"], target.cell),
+            env.sentry.attack_range,
+        )
+
+
     def test_selected_protected_base_keeps_learned_goal(self) -> None:
         env = SentryTacticalEnv(semantic_map=semantic_test_map(), seed=1)
         attacker = env.enemies[2]
@@ -223,6 +324,39 @@ class TacticalSemanticsTest(unittest.TestCase):
 
         self.assertEqual(target, env.BLUE_OUTPOST_TARGET)
         self.assertEqual(fire, env.FIRE_ENGAGE)
+        fixed_goal = env._sentry_outpost_attack_goal()
+        self.assertAlmostEqual(env._distance(fixed_goal, env.map.blue_outpost), 7.0, delta=0.25)
+        self.assertEqual(env._sentry_execution_goal((3, 7), env.BLUE_OUTPOST_TARGET), fixed_goal)
+
+    def test_designated_seven_meter_lane_can_hit_elevated_outpost(self) -> None:
+        env = SentryTacticalEnv(semantic_map=semantic_test_map(), seed=1)
+        fixed_goal = env._sentry_outpost_attack_goal()
+        env.sentry.cell = fixed_goal
+        assert env.map.raw_hard_blocked is not None
+        env.map.raw_hard_blocked[7, 22] = True
+        self.assertFalse(env.map.line_of_sight(env.sentry.cell, env.map.blue_outpost))
+        self._prime_building_hold(env, env.sentry, "outpost")
+
+        damage = env._sentry_fire(env.BLUE_OUTPOST_TARGET)
+
+        self.assertEqual(damage, 20.0)
+        env.match.advance(1.0)
+        env.sentry.cell = (fixed_goal[0], fixed_goal[1] - 5)
+        self.assertEqual(env._sentry_fire(env.BLUE_OUTPOST_TARGET), 0.0)
+
+    def test_one_minute_outpost_order_interrupts_for_lethal_threat(self) -> None:
+        env = SentryTacticalEnv(semantic_map=semantic_test_map(), seed=1)
+        env.match.time_s = 60.0
+        env.sentry.cell = (10, 7)
+        env.sentry.hp = 100.0
+        attacker = env.enemies[2]
+        attacker.cell = (12, 7)
+
+        _, target, fire = env._scheduled_sentry_action(0, env.BLUE_OUTPOST_TARGET, env.FIRE_ENGAGE)
+
+        self.assertEqual(target, 2)
+        self.assertEqual(fire, env.FIRE_ENGAGE)
+        self.assertIs(env._imminent_sentry_threat(), attacker)
 
     def test_regular_vehicle_effective_dps_is_symmetric_and_buildings_use_200_per_second(self) -> None:
         env = SentryTacticalEnv(semantic_map=semantic_test_map(), seed=1)
@@ -250,6 +384,37 @@ class TacticalSemanticsTest(unittest.TestCase):
         self.assertEqual(env._fire_unit_at_robot(env.sentry, aerial), 0.0)
         self.assertEqual(aerial.hp, aerial.max_hp)
 
+    def test_aerial_outpost_intent_uses_stable_airborne_standoff(self) -> None:
+        env = SentryTacticalEnv(semantic_map=semantic_test_map(), seed=1)
+        aerial = env.allies[4]
+        command = SimpleNamespace(goal_cell=(1, 1), target_role="前哨站")
+
+        goal = env._sparring_execution_goal(aerial, command)
+
+        self.assertNotEqual(goal, command.goal_cell)
+        self.assertGreaterEqual(env._distance(goal, env.map.blue_outpost), 2.0)
+        self.assertLessEqual(env._distance(goal, env.map.blue_outpost), 3.0)
+
+    def test_aerial_explicit_outpost_intent_fires_above_ground_occlusion(self) -> None:
+        env = SentryTacticalEnv(
+            semantic_map=semantic_test_map(), seed=1, sparring_fire_policy="intent_dps")
+        aerial = env.allies[4]
+        aerial.cell = env._aerial_structure_standoff_goal(aerial, env.map.blue_outpost)
+        assert env.map.raw_hard_blocked is not None
+        env.map.raw_hard_blocked[7, 21] = True
+        self.assertFalse(env.map.line_of_sight(aerial.cell, env.map.blue_outpost))
+        self._prime_building_hold(env, aerial, "outpost")
+        command = SimpleNamespace(
+            goal_cell=(1, 1), target_role="前哨站", fire_allowed=False)
+        result = {key: 0.0 for key in (
+            "red_sentry_damage", "red_outpost_damage", "red_base_damage",
+            "blue_outpost_damage", "blue_base_damage",
+        )}
+
+        env._execute_sparring_fire(aerial, command, result)
+
+        self.assertEqual(result["blue_outpost_damage"], 200.0)
+
     def test_ground_robot_respawns_at_own_supply_after_reader_finishes(self) -> None:
         env = SentryTacticalEnv(semantic_map=semantic_test_map(), seed=1)
         infantry = env.enemies[2]
@@ -262,6 +427,22 @@ class TacticalSemanticsTest(unittest.TestCase):
         self.assertAlmostEqual(infantry.hp, infantry.max_hp * 0.10)
         self.assertEqual(infantry.ammo, 37)
         self.assertEqual(infantry.cell, env.map.blue_base)
+
+    def test_scripted_backend_advances_ground_respawn_reader(self) -> None:
+        env = SentryTacticalEnv(
+            semantic_map=SemanticMap.demo(), horizon=4, seed=17,
+            sparring_backend="scripted",
+        )
+        observation = env.reset(seed=17)
+        unit = env.enemies[2]
+        unit.hp = 0.0
+        unit.respawn_remaining_s = 1.0
+        goal = int(np.flatnonzero(observation["goal_mask"])[0])
+
+        env.step((goal, env.NONE_TARGET, env.FIRE_HOLD))
+
+        self.assertTrue(unit.alive)
+        self.assertEqual(unit.hp, unit.max_hp * 0.10)
 
     def test_blue_sparring_profile_is_fixed_for_an_episode_and_reset_selects_from_pool(self) -> None:
         env = SentryTacticalEnv(
@@ -282,6 +463,43 @@ class TacticalSemanticsTest(unittest.TestCase):
         self.assertEqual(info["blue_autoaim_probability"], first_probability)
         env.reset()
         self.assertIn(env.blue_sparring_profile, {"pressure", "measured"})
+
+    def test_blue_style_profile_selects_its_own_frozen_policy(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        style_dirs = {
+            profile: {
+                "hero": f"sparring_style_pool/checkpoints/{profile}/hero",
+                "engineer": f"sparring_style_pool/checkpoints/{profile}/engineer",
+                "infantry3": f"sparring_style_pool/checkpoints/{profile}/infantry",
+                "infantry4": f"sparring_style_pool/checkpoints/{profile}/infantry",
+                "aerial": f"sparring_style_pool/checkpoints/{profile}/aerial",
+                "sentry": f"sparring_style_pool/checkpoints/{profile}/sentry",
+            }
+            for profile in ("aggressive", "measured")
+        }
+        env = SentryTacticalEnv(
+            semantic_map=semantic_test_map(),
+            seed=21,
+            sparring_backend="offline",
+            blue_sparring_profiles=("aggressive", "measured"),
+            blue_sparring_style_run_dirs=style_dirs,
+        )
+        blue_sentry = env.enemies[-1]
+
+        env.blue_sparring_profile = "aggressive"
+        aggressive = env._sparring_policy_for(blue_sentry)
+        env.blue_sparring_profile = "measured"
+        measured = env._sparring_policy_for(blue_sentry)
+
+        self.assertIsNot(aggressive, measured)
+        self.assertEqual(
+            env._blue_style_policy_keys[("aggressive", "sentry")][1],
+            str((root / style_dirs["aggressive"]["sentry"]).resolve()),
+        )
+        self.assertEqual(
+            env._blue_style_policy_keys[("measured", "sentry")][1],
+            str((root / style_dirs["measured"]["sentry"]).resolve()),
+        )
 
     def test_delivered_semantic_map_keeps_geometry_in_declared_world_orientation(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -340,6 +558,53 @@ class TacticalSemanticsTest(unittest.TestCase):
                 self.assertTrue(tactical_map.is_free(nxt))
                 self.assertEqual(abs(current[0] - nxt[0]) + abs(current[1] - nxt[1]), 1)
 
+    def test_delivered_map_goals_respect_gazebo_clearance(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        tactical_map = SemanticMap.from_aligned_json(
+            root / "sentry_tactical_rl/assets/semantic_map_aligned.json",
+            obstacle_path=root / "sentry_tactical_rl/assets/blackwhite_map.png",
+        )
+        assert tactical_map.raw_hard_blocked is not None
+        distance_m = cv2.distanceTransform(
+            (~tactical_map.raw_hard_blocked).astype(np.uint8),
+            cv2.DIST_L2,
+            cv2.DIST_MASK_PRECISE,
+        ) * tactical_map.resolution_m
+
+        for name, (x, y) in tactical_map.anchors.items():
+            self.assertGreaterEqual(distance_m[y, x] + 1e-6, 0.35, msg=name)
+        for name in ("tunnel_gain_1", "tunnel_gain_2", "tunnel_gain_3", "tunnel_gain_4"):
+            self.assertTrue(tactical_map.plan(tactical_map.red_base, tactical_map.anchors[name]).reachable)
+
+    def test_delivered_map_uses_exported_inflated_astar_png(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        tactical_map = SemanticMap.from_aligned_json(
+            root / "sentry_tactical_rl/assets/semantic_map_aligned.json",
+            obstacle_path=root / "sentry_tactical_rl/assets/blackwhite_map.png",
+        )
+        image = cv2.imread(
+            str(root / "sentry_tactical_rl/assets/blackwhite_astar_inflated_0p35m.png"),
+            cv2.IMREAD_GRAYSCALE,
+        )
+        self.assertIsNotNone(image)
+        exported_hard = np.flipud(image <= 5)
+
+        self.assertTrue(np.array_equal(tactical_map.hard_blocked, exported_hard))
+
+    def test_non_sentry_companions_use_uninflated_physical_map(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        tactical_map = SemanticMap.from_aligned_json(
+            root / "sentry_tactical_rl/assets/semantic_map_aligned.json",
+            obstacle_path=root / "sentry_tactical_rl/assets/blackwhite_map.png",
+        )
+        env = SentryTacticalEnv(semantic_map=tactical_map, seed=2)
+        inflation_only = np.argwhere(env.map.hard_blocked & ~env.companion_map.hard_blocked)
+        self.assertGreater(len(inflation_only), 0)
+        y, x = inflation_only[0]
+
+        self.assertFalse(env.map.is_free((int(x), int(y))))
+        self.assertTrue(env.companion_map.is_free((int(x), int(y))))
+
     def test_offline_adapter_reuses_the_161d_referee_contract(self) -> None:
         env = SentryTacticalEnv(seed=3)
         env.match.time_s = 123.0
@@ -381,6 +646,38 @@ class TacticalSemanticsTest(unittest.TestCase):
         self.assertEqual(info["goal_name"], "database_recorded")
         self.assertEqual(env.sentry.cell, expected_cell)
         self.assertEqual(env.sentry.hp, 321.0)
+
+    def test_external_sentry_pose_releases_goal_when_real_robot_arrives(self) -> None:
+        env = SentryTacticalEnv(semantic_map=semantic_test_map(), seed=3)
+        env.active_goal_cell = (10, 8)
+        env.active_goal_idx = 0
+        env.active_goal_reached = False
+
+        goal_x, goal_y = env.map.cell_to_meters(env.active_goal_cell)
+        env.set_external_sentry_state(
+            time_s=12.0, x_m=goal_x, y_m=goal_y,
+            hp=env.sentry.hp, max_hp=env.sentry.max_hp,
+        )
+
+        self.assertTrue(env.active_goal_reached)
+
+    def test_external_sentry_can_keep_interactive_damage_feedback(self) -> None:
+        env = SentryTacticalEnv(semantic_map=semantic_test_map(), seed=3)
+        target = env.enemies[2]
+        env.sentry.cell = (10, 8)
+        target.cell = (12, 8)
+        x_m, y_m = env.map.cell_to_meters(env.sentry.cell)
+        before = target.hp
+        env.set_external_sentry_state(
+            time_s=12.0, x_m=x_m, y_m=y_m,
+            hp=env.sentry.hp, max_hp=env.sentry.max_hp,
+            simulate_fire=True,
+        )
+
+        _, _, _, info = env.step((0, 2, env.FIRE_ENGAGE))
+
+        self.assertGreater(info["damage_dealt"], 0.0)
+        self.assertLess(target.hp, before)
 
     def test_frozen_blue_sentry_checkpoint_can_act_on_a_tactical_snapshot(self) -> None:
         root = Path(__file__).resolve().parents[1]
